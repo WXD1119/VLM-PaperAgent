@@ -70,8 +70,11 @@ Golden Set SHA256：`6a723400e056c919d3d7fa23da85b614b9f5fe46d00290ee6cc565299cb
 |---|---:|---:|---:|---:|
 | BM25 | 0.1875 | 0.8047 | 0.4917 | 0.5637 |
 | BGE-M3 Dense | 0.3828 | 0.7734 | 0.6406 | 0.6552 |
-| BM25 + BGE-M3 + RRF | **0.4766** | **0.8438** | **0.7208** | **0.7358** |
+| BM25 + BGE-M3 + RRF | 0.4766 | 0.8438 | 0.7208 | 0.7358 |
+| RRF + BGE Reranker v2-m3 | **0.5938** | **0.8984** | **0.7969** | **0.8019** |
 
 RRF在四项指标上均为最佳；相对BM25，Recall@1提高0.2891，Recall@5提高0.0391，MRR提高0.2291，nDCG@5提高0.1721。相对Dense，nDCG@5提高0.0806。该数据集用于开发阶段消融，后续仍需独立留出集。
 
 失败样例方面，`clip_architectures` 被BM25召回但在融合后跌出Top-5，适合用于加权RRF或Reranker优化；`peptide_evaluation_metrics` 在三种方案Top-5均未命中，但人工标注时目标表格位于BM25第10名，说明候选生成成功而最终排序不足，同样适合检验Top-20重排。
+
+Cross-Encoder精排相对RRF进一步提升Recall@1 0.1172、Recall@5 0.0546、MRR 0.0761和nDCG@5 0.0661。`clip_architectures`恢复为Top-5命中，验证了精排价值；`peptide_evaluation_metrics`仍未命中，需要继续检查该表格是否进入RRF Top-20以及表格文本表示质量。

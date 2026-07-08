@@ -114,6 +114,23 @@ python scripts/evaluate_dense.py \
   --output artifacts/evals/dense.seed.json
 ```
 
+Hybrid Top-20经过多语言Cross-Encoder精排：
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 CUDA_VISIBLE_DEVICES=2 \
+python scripts/evaluate_reranked.py \
+  --chunks artifacts/papers \
+  --db artifacts/chroma \
+  --embedding-model artifacts/models/bge-m3 \
+  --reranker-model artifacts/models/bge-reranker-v2-m3 \
+  --offline \
+  --device cuda:0 \
+  --golden evals/retrieval_golden.v1.json \
+  --candidate-k 20 \
+  --top-k 5 \
+  --output artifacts/evals/reranked.v1.json
+```
+
 ## 目录
 
 - `src/paper_agent/domain`：稳定的业务数据契约。

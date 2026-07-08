@@ -155,9 +155,10 @@
     "metrics": {
       "BM25": {"recall_at_1": 0.1875, "recall_at_5": 0.8047, "mrr": 0.4917, "ndcg_at_5": 0.5637},
       "BGE-M3_dense": {"recall_at_1": 0.3828, "recall_at_5": 0.7734, "mrr": 0.6406, "ndcg_at_5": 0.6552},
-      "BM25_BGE-M3_RRF": {"recall_at_1": 0.4766, "recall_at_5": 0.8438, "mrr": 0.7208, "ndcg_at_5": 0.7358}
+      "BM25_BGE-M3_RRF": {"recall_at_1": 0.4766, "recall_at_5": 0.8438, "mrr": 0.7208, "ndcg_at_5": 0.7358},
+      "RRF_BGE_reranker_v2_m3": {"recall_at_1": 0.5938, "recall_at_5": 0.8984, "mrr": 0.7969, "ndcg_at_5": 0.8019}
     },
-    "conclusion": "RRF achieved the best results on all four reported metrics. Compared with BM25, it improved Recall@1 by 0.2891, Recall@5 by 0.0391, MRR by 0.2291, and nDCG@5 by 0.1721.",
+    "conclusion": "Cross-encoder reranking achieved the best results on all four metrics. Compared with plain RRF, it improved Recall@1 by 0.1172, Recall@5 by 0.0546, MRR by 0.0761, and nDCG@5 by 0.0661.",
     "limitations": "The frozen development set contains 16 queries over three papers. Results are suitable as a development ablation, not a final held-out benchmark."
   },
   {

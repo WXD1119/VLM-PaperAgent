@@ -246,6 +246,16 @@
 - nDCG@5实测：BM25=0.5637、BGE-M3 Dense=0.6552、RRF=0.7358；RRF相对BM25绝对提升0.1721，相对Dense提升0.0806。
 - 代表性困难样例：`clip_architectures`在BM25命中但融合后跌出Top-5；`peptide_evaluation_metrics`的相关表格位于BM25第10名，三种Top-5均未命中。二者将作为加权RRF与Top-20 Reranker的回归用例。
 
+## 2026-07-08：Cross-Encoder Reranker骨架
+
+- 新增可替换的`Reranker`协议与`RerankedRetriever`，将候选生成和精排解耦。
+- 默认采用多语言`BAAI/bge-reranker-v2-m3`，支持本地模型路径、离线加载、GPU和批处理。
+- RRF先生成Top-20，Cross-Encoder联合编码query与候选证据，再输出Top-5。
+- 精排结果保留原始retrieval rank、RRF score、sparse rank和dense rank，便于解释排序变化。
+- 新增查询、评测CLI和Fake Reranker单元测试；真实消融结果待服务器模型准备后填写。
+- Reranker实测：Recall@1=0.5938、Recall@5=0.8984、MRR=0.7969、nDCG@5=0.8019，四项均优于未精排RRF。
+- `clip_architectures`恢复Top-5命中；`peptide_evaluation_metrics`仍为0，后续需审计RRF Top-20候选覆盖与表格序列化质量。
+
 - 对三篇真实论文生成 `chunks.json`，统计块类型、长度分布、超长块和公式上下文质量。
 - 补齐 FSM 重试、非法转换、节点缺失与最大步骤异常测试。
 - 实现 BM25、Dense Retrieval、RRF 与 Reranker 消融评测。
