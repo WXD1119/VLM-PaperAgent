@@ -17,7 +17,7 @@ def main() -> None:
         path.stem.removesuffix(".glm-judge"): SemanticCitationReport.model_validate_json(
             path.read_text(encoding="utf-8")
         )
-        for path in args.predictions.glob("*.json")
+        for path in args.predictions.glob("*.glm-judge.json")
     }
     result = evaluate_citation_judge(golden, predictions)
     print(f"cases: {result.case_count}")
