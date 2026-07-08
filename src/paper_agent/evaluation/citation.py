@@ -64,7 +64,8 @@ def evaluate_citation_judge(
 
     correct = sum(left == right for left, right in zip(expected, predicted))
     f1_values: list[float] = []
-    for verdict in SupportVerdict:
+    active_verdicts = set(expected) | set(predicted)
+    for verdict in active_verdicts:
         tp = sum(e == verdict and p == verdict for e, p in zip(expected, predicted))
         fp = sum(e != verdict and p == verdict for e, p in zip(expected, predicted))
         fn = sum(e == verdict and p != verdict for e, p in zip(expected, predicted))
@@ -80,7 +81,7 @@ def evaluate_citation_judge(
         case_count=len(golden.cases),
         claim_count=len(expected),
         claim_accuracy=_safe_ratio(correct, len(expected)),
-        macro_f1=mean(f1_values),
+        macro_f1=mean(f1_values) if f1_values else 0.0,
         supported_precision=_safe_ratio(supported_tp, supported_tp + supported_fp),
         supported_recall=_safe_ratio(supported_tp, supported_tp + supported_fn),
         abstention_accuracy=mean(case.abstention_correct for case in golden.cases),
