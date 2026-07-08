@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vlm-paper-agent"
+version = "0.1.0"
+description = "Evidence-grounded multimodal paper reading agent"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.7", "pydantic-settings>=2.2"]
+
+[project.optional-dependencies]
+api = ["fastapi>=0.111", "uvicorn>=0.30"]
+ui = ["streamlit>=1.35"]
+retrieval = ["chromadb>=1.1.13,<2", "sentence-transformers>=5,<6"]
+storage = ["redis>=5.0", "neo4j>=5.20"]
+dev = ["pytest>=8.2", "pytest-cov>=5.0", "ruff>=0.5", "mypy>=1.10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["scripts/build_v12_documents.py"]

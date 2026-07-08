@@ -1,0 +1,19 @@
+[
+  {"query_id":"blip2_qformer_role","query":"How does Q-Former bridge the frozen image encoder and frozen language model?","paper_id":"paper_6bc5d399d6127a64","category":"method"},
+  {"query_id":"blip2_two_stages","query":"What are the two stages of BLIP-2 pre-training?","paper_id":"paper_6bc5d399d6127a64","category":"method"},
+  {"query_id":"blip2_first_stage_objectives","query":"Which objectives are used for first-stage vision-language representation learning?","paper_id":"paper_6bc5d399d6127a64","category":"method"},
+  {"query_id":"blip2_vqa_finetuning","query":"How is BLIP-2 fine-tuned for visual question answering?","paper_id":"paper_6bc5d399d6127a64","category":"method"},
+  {"query_id":"blip2_retrieval_results","query":"Which table compares BLIP-2 image-text retrieval results on COCO and Flickr30K?","paper_id":"paper_6bc5d399d6127a64","kind":"table","category":"table"},
+
+  {"query_id":"clip_training_objective","query":"What training objective does CLIP use to learn image and text representations?","paper_id":"paper_6478b6e571a7d6fc","category":"method"},
+  {"query_id":"clip_zero_shot_classifier","query":"How does CLIP construct a zero-shot image classifier from text prompts?","paper_id":"paper_6478b6e571a7d6fc","category":"method"},
+  {"query_id":"clip_architectures","query":"Which image encoder architectures are evaluated in CLIP?","paper_id":"paper_6478b6e571a7d6fc","category":"method"},
+  {"query_id":"clip_distribution_shift","query":"What evidence shows that zero-shot CLIP is robust to natural distribution shift?","paper_id":"paper_6478b6e571a7d6fc","kind":"figure","category":"figure"},
+  {"query_id":"clip_linear_probe_table","query":"Which table reports linear probe performance across 27 datasets?","paper_id":"paper_6478b6e571a7d6fc","kind":"table","category":"table"},
+
+  {"query_id":"peptide_residue_representation","query":"How is each amino acid residue represented in the peptide model?","paper_id":"paper_33eb859882132fd0","category":"method"},
+  {"query_id":"peptide_cfm_objective","query":"What is the conditional flow matching training objective?","paper_id":"paper_33eb859882132fd0","kind":"equation","category":"equation"},
+  {"query_id":"peptide_modalities","query":"Into which four modalities is the peptide conditional distribution decomposed?","paper_id":"paper_33eb859882132fd0","category":"method"},
+  {"query_id":"peptide_position_interpolation","query":"What interpolation path is used for peptide atom positions?","paper_id":"paper_33eb859882132fd0","kind":"equation","category":"equation"},
+  {"query_id":"peptide_evaluation_metrics","query":"Which geometry and energy metrics evaluate generated peptide binders?","paper_id":"paper_33eb859882132fd0","category":"evaluation"}
+]

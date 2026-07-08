@@ -1,0 +1,183 @@
+[
+  {
+    "experiment_id": "ingestion_noise_filter_v1",
+    "date": "2026-07-07",
+    "category": "engineering_comparison",
+    "status": "completed",
+    "dataset": {
+      "papers": ["CLIP", "BLIP-2"],
+      "count": 2
+    },
+    "control": "MinerU elements without header/page-number filtering and complete type mapping",
+    "treatment": "Filter header/page_number; map aside_text, page_footnote and chart; exclude footnotes from retrieval",
+    "metrics": {
+      "CLIP": {
+        "elements_before": 375,
+        "elements_after": 281,
+        "unmapped_types_before": 126,
+        "unmapped_types_after": 0
+      },
+      "BLIP-2": {
+        "elements_before": 93,
+        "elements_after": 84,
+        "unmapped_types_before": 12,
+        "unmapped_types_after": 0
+      }
+    },
+    "conclusion": "Filtering repeated page furniture removed retrieval noise and eliminated unmapped parser types.",
+    "limitations": "This comparison measures structural cleanliness, not downstream retrieval accuracy."
+  },
+  {
+    "experiment_id": "chunk_oversize_split_v1",
+    "date": "2026-07-07",
+    "category": "engineering_comparison",
+    "status": "completed",
+    "dataset": {
+      "papers": ["CLIP", "Full-Atom Peptide Design", "BLIP-2"],
+      "count": 3
+    },
+    "control": "Element-aware chunking without dedicated long-text and HTML-row splitting",
+    "treatment": "Sentence-safe text splitting plus HTML table row grouping with repeated caption/header",
+    "metrics": {
+      "CLIP": {
+        "children_before": 132,
+        "children_after": 141,
+        "max_chars_before": 23283,
+        "max_chars_after": 2766,
+        "oversized_before": 4,
+        "oversized_after": 0
+      },
+      "Full-Atom Peptide Design": {
+        "children_before": 148,
+        "children_after": 147,
+        "max_chars_before": 3337,
+        "max_chars_after": 2777,
+        "oversized_before": 3,
+        "oversized_after": 0
+      },
+      "BLIP-2": {
+        "children_before": 39,
+        "children_after": 40,
+        "max_chars_before": 3519,
+        "max_chars_after": 2728,
+        "oversized_before": 1,
+        "oversized_after": 0
+      },
+      "integrity_after": {
+        "duplicate_chunk_ids": 0,
+        "invalid_parent_references": 0,
+        "equations_without_context": 0,
+        "equation_count": 46
+      }
+    },
+    "conclusion": "All chunks fit the 2800-character budget without breaking parent links or equation context.",
+    "limitations": "Character length is a model-independent proxy; token counts will be measured after the embedding tokenizer is loaded."
+  },
+  {
+    "experiment_id": "bm25_seed_v0",
+    "date": "2026-07-07",
+    "category": "retrieval_baseline",
+    "status": "completed",
+    "dataset": {
+      "name": "retrieval_golden.seed.json",
+      "cases": 3,
+      "papers": 2
+    },
+    "variant": {
+      "retriever": "BM25Okapi",
+      "k1": 1.5,
+      "b": 0.75,
+      "top_k": 5,
+      "tokenizer": "academic-v1"
+    },
+    "metrics": {
+      "macro_recall_at_1": 0.3333,
+      "macro_recall_at_5": 1.0,
+      "mean_reciprocal_rank": 0.8333
+    },
+    "per_case": {
+      "blip2_qformer_bridge": {"recall_at_1": 0.5, "recall_at_5": 1.0, "reciprocal_rank": 1.0},
+      "flow_matching_objective": {"recall_at_1": 0.5, "recall_at_5": 1.0, "reciprocal_rank": 1.0},
+      "flow_matching_equation_1": {"recall_at_1": 0.0, "recall_at_5": 1.0, "reciprocal_rank": 0.5}
+    },
+    "conclusion": "BM25 provides a working lexical baseline but ranks an appendix formula above the intended main-text equation for a generic formula query.",
+    "limitations": "Only three seed cases; this result validates the evaluation pipeline and must not be used as a resume KPI."
+  },
+  {
+    "experiment_id": "dense_seed_v0",
+    "date": "2026-07-07",
+    "category": "retrieval_baseline",
+    "status": "completed",
+    "dataset": {"name": "retrieval_golden.seed.json", "cases": 3, "papers": 2},
+    "variant": {"retriever": "BGE-M3 dense", "model": "artifacts/models/bge-m3", "embedding_dimension": 1024, "vector_store": "Chroma", "indexed_chunks": 328, "top_k": 5},
+    "metrics": {"macro_recall_at_1": 0.1667, "macro_recall_at_5": 0.6667, "mean_reciprocal_rank": 0.5},
+    "per_case": {
+      "blip2_qformer_bridge": {"recall_at_1": 0.5, "recall_at_5": 1.0, "reciprocal_rank": 1.0},
+      "flow_matching_objective": {"recall_at_1": 0.0, "recall_at_5": 1.0, "reciprocal_rank": 0.5},
+      "flow_matching_equation_1": {"recall_at_1": 0.0, "recall_at_5": 0.0, "reciprocal_rank": 0.0}
+    },
+    "conclusion": "BGE-M3 retrieved the Chinese Q-Former query at rank 1, confirming cross-lingual semantic retrieval, but underperformed BM25 on the equation-focused seed cases.",
+    "limitations": "Only three seed cases; this is a pipeline diagnostic and must not be presented as a final resume KPI."
+  },
+  {
+    "experiment_id": "hybrid_rrf_seed_v0",
+    "date": "2026-07-07",
+    "category": "retrieval_baseline",
+    "status": "completed",
+    "dataset": {"name": "retrieval_golden.seed.json", "cases": 3, "papers": 2},
+    "variant": {
+      "retriever": "BM25 + BGE-M3 + RRF",
+      "sparse": "BM25Okapi academic-v1",
+      "dense": "BGE-M3 with Chroma",
+      "rrf_k": 60,
+      "candidate_k": 20,
+      "top_k": 5
+    },
+    "metrics": {"macro_recall_at_1": 0.3333, "macro_recall_at_5": 1.0, "mean_reciprocal_rank": 0.7333},
+    "per_case": {
+      "blip2_qformer_bridge": {"recall_at_1": 0.5, "recall_at_5": 1.0, "reciprocal_rank": 1.0},
+      "flow_matching_objective": {"recall_at_1": 0.5, "recall_at_5": 1.0, "reciprocal_rank": 1.0},
+      "flow_matching_equation_1": {"recall_at_1": 0.0, "recall_at_5": 1.0, "reciprocal_rank": 0.2}
+    },
+    "conclusion": "RRF restored Recall@5 to 1.0 compared with dense retrieval, while preserving the cross-lingual Q-Former rank-1 hit. It did not beat BM25 MRR because the equation target moved from rank 2 to rank 5.",
+    "limitations": "Only three seed cases. Equal-weight RRF and a single candidate_k/rrf_k setting were evaluated."
+  },
+  {
+    "experiment_id": "retrieval_ablation_v1_16",
+    "date": "2026-07-08",
+    "category": "retrieval_ablation",
+    "status": "completed",
+    "dataset": {
+      "name": "retrieval_golden.v1.json",
+      "cases": 16,
+      "sha256": "6a723400e056c919d3d7fa23da85b614b9f5fe46d00290ee6cc565299cbb1bb4"
+    },
+    "metrics": {
+      "BM25": {"recall_at_1": 0.1875, "recall_at_5": 0.8047, "mrr": 0.4917},
+      "BGE-M3_dense": {"recall_at_1": 0.3828, "recall_at_5": 0.7734, "mrr": 0.6406},
+      "BM25_BGE-M3_RRF": {"recall_at_1": 0.4766, "recall_at_5": 0.8438, "mrr": 0.7208}
+    },
+    "conclusion": "RRF achieved the best results on all three reported metrics. Compared with BM25, it improved Recall@1 by 0.2891, Recall@5 by 0.0391, and MRR by 0.2291.",
+    "limitations": "The frozen development set contains 16 queries over three papers. Results are suitable as a development ablation, not a final held-out benchmark."
+  },
+  {
+    "experiment_id": "retrieval_ablation_v1",
+    "date": null,
+    "category": "retrieval_ablation",
+    "status": "pending",
+    "dataset": {
+      "name": "retrieval_golden.v1.json",
+      "target_cases": 30,
+      "minimum_development_cases": 15
+    },
+    "variants": [
+      "BM25",
+      "BGE-M3 dense",
+      "BM25 + BGE-M3 + RRF",
+      "BM25 + BGE-M3 + RRF + reranker"
+    ],
+    "metrics": ["Recall@1", "Recall@5", "Recall@10", "MRR", "nDCG@10", "latency_ms"],
+    "result": null,
+    "notes": "Run only after human labels are frozen; do not modify labels after observing model results."
+  }
+]

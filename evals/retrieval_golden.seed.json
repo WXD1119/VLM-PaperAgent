@@ -1,0 +1,33 @@
+[
+  {
+    "query_id": "blip2_qformer_bridge",
+    "query": "Q-Former frozen image encoder",
+    "paper_id": "paper_6bc5d399d6127a64",
+    "kind": "text",
+    "relevant_chunk_ids": [
+      "child_93ef7db582e33f341708e079",
+      "child_b21c076c69c6214b147535b7"
+    ],
+    "notes": "人工核对：模型架构与方法总览均直接回答 Q-Former 如何桥接冻结编码器和 LLM。"
+  },
+  {
+    "query_id": "flow_matching_objective",
+    "query": "flow matching objective theta vector field",
+    "paper_id": "paper_33eb859882132fd0",
+    "relevant_chunk_ids": [
+      "child_101caa70ac1e913ce7e8fc6f",
+      "child_169ff960927731ceecf42b91"
+    ],
+    "notes": "人工核对：正文定义段落与公式(1)共同构成完整证据。"
+  },
+  {
+    "query_id": "flow_matching_equation_1",
+    "query": "theta vector field",
+    "paper_id": "paper_33eb859882132fd0",
+    "kind": "equation",
+    "relevant_chunk_ids": [
+      "child_169ff960927731ceecf42b91"
+    ],
+    "notes": "刻意保留的困难样例：BM25容易把附录中术语重复更多的公式排在正文公式(1)之前。"
+  }
+]
