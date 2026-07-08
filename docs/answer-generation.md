@@ -31,3 +31,7 @@ For independent evaluation, GLM runs in a separate Conda environment behind a lo
 HTTP service. `RemoteStructuredClient` lets the answer process call it without sharing Python,
 Transformers, or CUDA dependencies. The service must not bind to a public interface because it has
 no authentication layer.
+
+On limited hardware, prefer sequential offline judging: `answer_question.py --output` persists the
+answer and exact evidence pack, then exits and releases Qwen. `judge_answer.py` loads that immutable
+bundle in the isolated GLM environment. This avoids concurrent model residency and CPU offload.

@@ -7,6 +7,7 @@ from paper_agent.agents.answer import (
     build_evidence_pack,
 )
 from paper_agent.domain import (
+    AnswerBundle,
     AnswerClaim,
     ChunkKind,
     ClaimSupportAssessment,
@@ -92,3 +93,20 @@ def test_semantic_judge_skips_abstention():
     pack = build_evidence_pack("question", [hit()])
     answer = GroundedAnswer(answer="unknown", abstained=True, abstention_reason="No evidence")
     assert SemanticCitationJudge(FakeJudgeClient()).evaluate(answer, pack).assessments == []
+
+
+def test_answer_bundle_round_trip():
+    pack = build_evidence_pack("question", [hit()])
+    answer = GroundedAnswer(
+        answer="answer",
+        claims=[AnswerClaim(text="It uses learnable queries.", evidence_ids=["E1"])],
+    )
+    validation = CitationValidator().validate(answer, pack)
+    bundle = AnswerBundle(
+        evidence_pack=pack,
+        answer=answer,
+        citation_validation=validation,
+        generator_model="local-model",
+    )
+    restored = AnswerBundle.model_validate_json(bundle.model_dump_json())
+    assert restored.answer.claims[0].evidence_ids == ["E1"]

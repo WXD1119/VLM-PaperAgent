@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from paper_agent.agents import AnswerAgent, SemanticCitationJudge, build_evidence_pack
+from paper_agent.domain import AnswerBundle
 from paper_agent.llm import (
     OpenAICompatibleClient,
     RemoteStructuredClient,
@@ -46,6 +47,7 @@ def main() -> None:
     parser.add_argument("--api-key-env", default="DEEPSEEK_API_KEY")
     parser.add_argument("--verify-semantics", action="store_true")
     parser.add_argument("--judge-url", default=None)
+    parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
     chunks = chunks_from_bundles(load_chunk_bundles(args.chunks))
@@ -70,6 +72,15 @@ def main() -> None:
             parser.error(f"environment variable {args.api_key_env} is required")
         client = OpenAICompatibleClient(args.model, api_key, args.base_url)
     answer, validation = AnswerAgent(client).answer(pack)
+    bundle = AnswerBundle(
+        evidence_pack=pack,
+        answer=answer,
+        citation_validation=validation,
+        generator_model=args.model,
+    )
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(bundle.model_dump_json(indent=2), encoding="utf-8")
     print(answer.answer)
     print(f"\nAbstained: {answer.abstained}")
     if answer.abstention_reason:
@@ -83,6 +94,8 @@ def main() -> None:
             f"[{item.evidence_id}] {item.paper_id} pages={item.pages} "
             f"chunk_id={item.chunk_id}"
         )
+    if args.output:
+        print(f"Answer bundle: {args.output}")
     if args.verify_semantics:
         judge_client = RemoteStructuredClient(args.judge_url) if args.judge_url else client
         semantic = SemanticCitationJudge(judge_client).evaluate(answer, pack)

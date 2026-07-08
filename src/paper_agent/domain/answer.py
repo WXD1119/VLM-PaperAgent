@@ -67,3 +67,10 @@ class SemanticCitationReport(BaseModel):
     @property
     def all_supported(self) -> bool:
         return all(item.verdict == SupportVerdict.SUPPORTED for item in self.assessments)
+
+
+class AnswerBundle(BaseModel):
+    evidence_pack: EvidencePack
+    answer: GroundedAnswer
+    citation_validation: CitationValidation
+    generator_model: str

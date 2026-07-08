@@ -271,6 +271,10 @@
   generation completed correctly. Added a localhost-only FastAPI judge service and a dependency-
   free remote structured client, enabling heterogeneous Qwen generation and GLM judging across
   isolated Conda environments. The service dynamically supports one or more visible GPUs.
+- Real heterogeneous execution exposed a resource bottleneck: Qwen occupied GPUs 2/3 while GLM on
+  GPU 0 exceeded the 19 GiB budget and offloaded parameters to CPU, making semantic generation
+  exceed practical request latency. The preferred path is now sequential offline judging: persist
+  an immutable `AnswerBundle`, terminate Qwen, then load GLM across GPUs 2/3 with `judge_answer.py`.
 
 ## 2026-07-08：远程VS Code自动评测
 

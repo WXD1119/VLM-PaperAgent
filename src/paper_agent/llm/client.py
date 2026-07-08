@@ -135,3 +135,73 @@ class TransformersStructuredClient:
         if start < 0 or end < start:
             raise ValueError("local model did not return a JSON object")
         return stripped[start : end + 1]
+
+
+class GlmStructuredClient:
+    """Local GLM-V client intended for an isolated, sequential judge process."""
+
+    def __init__(
+        self,
+        model_path: str,
+        max_memory_gib: int = 12,
+        max_new_tokens: int = 2048,
+    ) -> None:
+        try:
+            import torch
+            from transformers import AutoProcessor, Glm4vForConditionalGeneration
+        except ImportError as exc:
+            raise RuntimeError("Install judge dependencies: pip install -e '.[judge]'") from exc
+        self.torch = torch
+        self.max_new_tokens = max_new_tokens
+        self.processor = AutoProcessor.from_pretrained(
+            model_path, local_files_only=True, use_fast=True
+        )
+        max_memory = {
+            index: f"{max_memory_gib}GiB" for index in range(torch.cuda.device_count())
+        }
+        max_memory["cpu"] = "32GiB"
+        self.model = Glm4vForConditionalGeneration.from_pretrained(
+            model_path,
+            dtype=torch.bfloat16,
+            device_map="auto",
+            max_memory=max_memory,
+            low_cpu_mem_usage=True,
+            local_files_only=True,
+        )
+
+    def generate_structured(self, prompt: str, response_model: type[T]) -> T:
+        schema = json.dumps(response_model.model_json_schema(), ensure_ascii=False)
+        messages = [{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": (
+                    "Return exactly one JSON object matching this schema in the answer tag. "
+                    f"Schema: {schema}\n\nTask:\n{prompt}"
+                ),
+            }],
+        }]
+        inputs = self.processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        inputs = {key: value.to(self.model.device) for key, value in inputs.items()}
+        with self.torch.inference_mode():
+            generated = self.model.generate(
+                **inputs, max_new_tokens=self.max_new_tokens, do_sample=False
+            )
+        new_tokens = generated[:, inputs["input_ids"].shape[1] :]
+        content = self.processor.batch_decode(new_tokens, skip_special_tokens=False)[0]
+        return response_model.model_validate(self._extract_json(content))
+
+    @staticmethod
+    def _extract_json(content: str) -> dict:
+        answer = re.search(r"<answer>\s*(.*?)\s*</answer>", content, re.DOTALL)
+        candidate = answer.group(1) if answer else content
+        value = json.loads(TransformersStructuredClient._extract_json(candidate))
+        if not isinstance(value, dict):
+            raise ValueError("GLM judge must return a JSON object")
+        return value

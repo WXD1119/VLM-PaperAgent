@@ -1,6 +1,7 @@
 """LLM clients and structured-output validation."""
 
 from .client import (
+    GlmStructuredClient,
     LLMClient,
     OpenAICompatibleClient,
     RemoteStructuredClient,
@@ -8,6 +9,6 @@ from .client import (
 )
 
 __all__ = [
-    "LLMClient", "OpenAICompatibleClient", "RemoteStructuredClient",
+    "GlmStructuredClient", "LLMClient", "OpenAICompatibleClient", "RemoteStructuredClient",
     "TransformersStructuredClient",
 ]

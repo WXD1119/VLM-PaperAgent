@@ -1,4 +1,5 @@
 from .answer import (
+    AnswerBundle,
     AnswerClaim,
     CitationValidation,
     ClaimSupportAssessment,
@@ -14,7 +15,7 @@ from .review import Claim, ReviewFinding, ReviewReport, Verdict
 from .workflow import NodeResult, RunContext, WorkflowState
 
 __all__ = [
-    "AnswerClaim", "ChunkBundle", "ChunkKind", "CitationValidation", "Claim",
+    "AnswerBundle", "AnswerClaim", "ChunkBundle", "ChunkKind", "CitationValidation", "Claim",
     "ClaimSupportAssessment",
     "ElementType", "EvidenceItem", "EvidencePack", "GroundedAnswer", "NodeResult", "Paper",
     "PaperElement", "ParentChunk", "RetrievalChunk", "ReviewFinding", "ReviewReport",
