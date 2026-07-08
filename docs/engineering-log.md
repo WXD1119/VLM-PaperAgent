@@ -243,6 +243,8 @@
 - BM25 + BGE-M3 + RRF：Recall@1=0.4766、Recall@5=0.8438、MRR=0.7208。
 - 远程项目目录缺少 `.git`，无法通过git pull可靠同步；当前依赖WinSCP，后续应改成Git仓库作为唯一代码源，数据与模型继续留在服务器且由.gitignore排除。
 - 新增二元相关性nDCG@5：对相关证据按排名对数折损并以理想DCG归一化；三种评测CLI均输出逐题和宏平均nDCG@5。
+- nDCG@5实测：BM25=0.5637、BGE-M3 Dense=0.6552、RRF=0.7358；RRF相对BM25绝对提升0.1721，相对Dense提升0.0806。
+- 代表性困难样例：`clip_architectures`在BM25命中但融合后跌出Top-5；`peptide_evaluation_metrics`的相关表格位于BM25第10名，三种Top-5均未命中。二者将作为加权RRF与Top-20 Reranker的回归用例。
 
 - 对三篇真实论文生成 `chunks.json`，统计块类型、长度分布、超长块和公式上下文质量。
 - 补齐 FSM 重试、非法转换、节点缺失与最大步骤异常测试。
