@@ -233,6 +233,45 @@
 
 ## 待办
 
+## 2026-07-08: Evidence-grounded Answer MVP
+
+- Added request-local evidence packs with stable `E1...En` identifiers.
+- Added structured claim-level answers, explicit abstention, and citation integrity validation.
+- Added an OpenAI-compatible client so DeepSeek and GLM can be switched by configuration.
+- Added the end-to-end `answer_question.py` CLI on top of RRF plus BGE reranking.
+- Model policy: use a low-cost text model for normalized MinerU evidence; reserve a vision model
+  for questions whose selected figure cannot be answered from caption or OCR.
+- Added three unit tests covering traceable claims, unknown citations, and invalid abstention.
+- Local `compileall` and `git diff --check` passed. Full pytest remains a server-side check because
+  the local desktop environment contains Pydantic v1 while the project requires Pydantic v2.7+.
+- Selected the locally downloaded `Qwen3-VL-8B-Instruct` as the free default model. Added a
+  Transformers structured-output client and retained the paid OpenAI-compatible adapter only as
+  an optional experiment baseline. Direct Transformers inference was chosen to reduce the CUDA
+  compatibility risk previously encountered with vLLM on the NVIDIA 535 driver.
+- First server smoke test succeeded with local Qwen3-VL-8B-Instruct. For the Q-Former bridge
+  question, the model returned four structured claims, cited only supplied IDs `E1`-`E5`, and
+  passed citation-integrity validation. Manual review flagged claim 3 ("reducing the burden on the
+  LLM") as a useful hard case: its citation is syntactically valid, but semantic support may be
+  weaker than the generated wording. This confirms the next metric must distinguish citation
+  validity from claim-evidence entailment.
+- Abstention smoke test succeeded: an out-of-scope GPT-4 training question produced no claims and
+  did not attach irrelevant retrieved chunks as citations. The CLI now prints `abstained` and the
+  abstention reason explicitly instead of exposing only an empty claim list.
+- Equation smoke test succeeded: the conditional flow matching objective retrieved the definition
+  and equation from page 3 and bound the formula and conditioning explanation to separate evidence.
+- Added an optional batched semantic citation judge with `supported`, `partially_supported`, and
+  `unsupported` verdicts. It validates assessment cardinality and evidence IDs. Since generation
+  and judging use the same Qwen checkpoint, this guard is not treated as an independent metric.
+- Prepared an isolated `judge-vlm` environment for the independent GLM judge. Server verification:
+  PyTorch 2.7.1+cu118, Transformers 4.57.6, CUDA available on RTX 4090. The locally downloaded
+  `GLM-4.1V-9B-Thinking` checkpoint occupies about 20 GB and all four safetensors shards are
+  present. Keeping this dependency stack separate prevents changes to the retrieval/Qwen runtime.
+- GLM smoke inference succeeded with the checkpoint split across two RTX 4090 GPUs and classified
+  the controlled Q-Former claim as supported. The NVIDIA 535 driver emitted a P2P warning, but the
+  generation completed correctly. Added a localhost-only FastAPI judge service and a dependency-
+  free remote structured client, enabling heterogeneous Qwen generation and GLM judging across
+  isolated Conda environments. The service dynamically supports one or more visible GPUs.
+
 ## 2026-07-08：远程VS Code自动评测
 
 - 通过VS Code Remote SSH连接服务器 `122.207.108.8`，在 `/workspace/guest/wxd/VLM-PaperAgent` 的 Conda `paper-agent` 环境执行。

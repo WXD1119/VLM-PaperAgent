@@ -159,3 +159,21 @@ python scripts/evaluate_reranked.py \
 source /workspace/guest/wxd/anaconda3/etc/profile.d/conda.sh
 conda activate paper-agent
 cd /workspace/guest/wxd/VLM-PaperAgent
+## Evidence-grounded answer generation
+
+The answer stage uses reranked chunks as a bounded `EvidencePack`. The LLM must return
+claim-level evidence IDs; the citation validator rejects IDs that were not supplied. The default
+provider is configurable through an OpenAI-compatible interface, so DeepSeek and GLM can be
+compared without changing agent logic.
+
+```bash
+pip install -e '.[retrieval,local-vlm]'
+CUDA_VISIBLE_DEVICES=2,3 python scripts/answer_question.py \
+  --chunks artifacts/papers --offline --device cuda:0 --llm-device cuda:1 \
+  --provider local --model artifacts/models/Qwen3-VL-8B-Instruct \
+  --query 'How does Q-Former connect the frozen image encoder and LLM?'
+```
+
+API keys are read from environment variables and must never be committed. The first MVP sends
+MinerU text, equations, tables, and figure captions to a text LLM. Raw figure pixels will be routed
+to a vision model only when caption/OCR evidence is insufficient.
