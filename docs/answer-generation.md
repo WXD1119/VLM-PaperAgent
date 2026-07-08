@@ -35,3 +35,8 @@ no authentication layer.
 On limited hardware, prefer sequential offline judging: `answer_question.py --output` persists the
 answer and exact evidence pack, then exits and releases Qwen. `judge_answer.py` loads that immutable
 bundle in the isolated GLM environment. This avoids concurrent model residency and CPU offload.
+
+Human citation evaluation uses saved answer bundles rather than regenerated text. Annotators label
+each claim as supported, partially supported, or unsupported while viewing only its cited evidence.
+The judge is scored with claim accuracy, macro F1, supported precision/recall, and abstention
+accuracy. Model verdicts are never copied into the human Golden Set.

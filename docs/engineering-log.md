@@ -275,6 +275,15 @@
   GPU 0 exceeded the 19 GiB budget and offloaded parameters to CPU, making semantic generation
   exceed practical request latency. The preferred path is now sequential offline judging: persist
   an immutable `AnswerBundle`, terminate Qwen, then load GLM across GPUs 2/3 with `judge_answer.py`.
+- Independent GLM judging succeeded for the conditional flow matching answer. Claim 1's objective
+  equation was judged supported by E2, and claim 2's conditioning explanation was judged supported
+  by E1; `all_supported=true`. The structured report was persisted to
+  `artifacts/evals/cfm.glm-judge.json`. This is an integration result, not an accuracy metric; a
+  manually labeled multi-case citation set is required before reporting Judge precision/recall.
+- Added resumable human citation annotation over immutable answer bundles. Labels use the same
+  three-class contract as the Judge but are entered independently while the claim and cited
+  evidence are displayed. Added automatic Claim Accuracy, Macro-F1, Supported Precision/Recall,
+  and Abstention Accuracy evaluation with strict case/claim alignment checks.
 
 ## 2026-07-08：远程VS Code自动评测
 

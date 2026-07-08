@@ -3,5 +3,14 @@
 from .golden import RetrievalCase, RetrievalEvaluation, evaluate_bm25, evaluate_retriever
 
 __all__ = [
-    "RetrievalCase", "RetrievalEvaluation", "evaluate_bm25", "evaluate_retriever"
+    "CitationCaseLabel", "CitationClaimLabel", "CitationEvaluation", "CitationGoldenSet",
+    "RetrievalCase", "RetrievalEvaluation", "evaluate_bm25", "evaluate_citation_judge",
+    "evaluate_retriever",
 ]
+from .citation import (
+    CitationCaseLabel,
+    CitationClaimLabel,
+    CitationEvaluation,
+    CitationGoldenSet,
+    evaluate_citation_judge,
+)
