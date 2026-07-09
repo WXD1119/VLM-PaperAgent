@@ -216,3 +216,30 @@ python scripts/ask.py \
   --judge-url http://127.0.0.1:8765 \
   --max-answer-attempts 2
 ```
+
+## FastAPI service
+
+The same pipeline can be exposed as a local HTTP service. Runtime configuration is read from
+environment variables so model paths do not need to be hard-coded into requests.
+
+```bash
+export PAPER_AGENT_CHUNKS=artifacts/papers
+export PAPER_AGENT_CHROMA_DB=artifacts/chroma
+export PAPER_AGENT_EMBEDDING_MODEL=artifacts/models/bge-m3
+export PAPER_AGENT_RERANKER_MODEL=artifacts/models/bge-reranker-v2-m3
+export PAPER_AGENT_LLM_MODEL=artifacts/models/Qwen3-VL-8B-Instruct
+export PAPER_AGENT_OFFLINE=1
+export PAPER_AGENT_DEVICE=cuda:0
+export PAPER_AGENT_LLM_DEVICE=cuda:1
+export PAPER_AGENT_JUDGE_URL=http://127.0.0.1:8765
+
+uvicorn paper_agent.api.main:app --host 127.0.0.1 --port 8000
+```
+
+Then ask a question:
+
+```bash
+curl -X POST http://127.0.0.1:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"query": "How does Q-Former bridge the frozen image encoder and frozen language model?", "top_k": 5}'
+```

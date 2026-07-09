@@ -348,3 +348,11 @@
 - `scripts/ask.py` 新增 `--judge-url` 与 `--max-answer-attempts`：开启后执行 Answer → Semantic Judge → Feedback Revision；若最终仍未全 supported，则输出显式 abstention，而不是输出未通过审查的答案。
 - `serve_glm_judge.py` 同步加入首个括号配平 JSON 提取、JSON Schema 复读检测和面向 `SemanticCitationReport` / `ClaimSupportAssessment` 的具体 JSON 模板，保证 HTTP judge service 与离线 `judge_answer.py` 的鲁棒性一致。
 - 新增单元测试覆盖 semantic gate 重试成功和重试失败后拒答两条路径。
+
+## 2026-07-09：FastAPI 服务入口
+
+- 扩展 `src/paper_agent/api/main.py`，新增 `/ask` 接口，将检索、可选精排、AnswerAgent、citation validation 和可选 semantic gate 封装为 HTTP 服务。
+- API 使用 `LazyPaperQAService` 懒加载模型和索引，`/health` 不触发大模型加载，第一次 `/ask` 请求才初始化 BM25、Chroma、BGE-M3、reranker 和 Qwen。
+- 运行配置通过环境变量注入：`PAPER_AGENT_CHUNKS`、`PAPER_AGENT_CHROMA_DB`、`PAPER_AGENT_EMBEDDING_MODEL`、`PAPER_AGENT_RERANKER_MODEL`、`PAPER_AGENT_LLM_MODEL`、`PAPER_AGENT_JUDGE_URL` 等。
+- `create_app(service=...)` 支持测试注入 fake service，新增 `tests/test_api.py` 验证 `/health` 和 `/ask` 的响应结构，不依赖真实 GPU 模型。
+- 当前 API 绑定建议使用 `127.0.0.1`，避免无鉴权服务暴露到公网；后续如做 Web UI，可由同机 Streamlit 或前端调用该本地 API。
