@@ -311,3 +311,23 @@
 - 对三篇真实论文生成 `chunks.json`，统计块类型、长度分布、超长块和公式上下文质量。
 - 补齐 FSM 重试、非法转换、节点缺失与最大步骤异常测试。
 - 实现 BM25、Dense Retrieval、RRF 与 Reranker 消融评测。
+
+## 2026-07-09：AnswerAgent 与独立 Citation Judge 闭环
+
+- 生成并保存三个不可变 `AnswerBundle`：`cfm`、`blip2_qformer_bridge` 和 `gpt4_learning_rate`。其中前两个为可回答样例，共 6 条 claim；第三个为拒答案例，用于验证 abstention。
+- 人工标注 `evals/citation_golden.v1.json`，标注协议与 Judge 一致：claim 级别 `supported`、`partially_supported`、`unsupported`，并单独记录 abstention decision 是否正确。
+- 使用 `GLM-4.1V-9B-Thinking` 在独立 `judge-vlm` 环境中顺序评审，避免 Qwen 与 GLM 同时驻留导致显存和 CPU offload 问题。
+- 暴露并修复三类本地 thinking 模型结构化输出问题：
+  - JSON 后追加 `<think>` 或额外对象导致 `Extra data`，通过首个括号配平 JSON 提取解决。
+  - 批量评审遗漏或重复 claim，自动 fallback 到逐 claim 评审。
+  - 模型复读 JSON Schema 而不是生成 JSON instance，改用具体 JSON 模板并显式拒绝 schema 对象。
+- 回归测试入口：`python -m pytest tests/test_answer_agent.py -v`；服务器 `paper-agent` 环境使用 Pydantic v2，作为最终测试环境。
+- Citation Judge smoke evaluation：
+  - cases=3，claims=6。
+  - Claim Accuracy=1.0000。
+  - Macro F1=1.0000。
+  - Supported Precision=1.0000。
+  - Supported Recall=1.0000。
+  - Abstention Accuracy=1.0000。
+- 评测产物：`artifacts/evals/citation_judge.v1.json`；机器可读实验登记：`evals/experiment_registry.json` 的 `citation_judge_smoke_v1_3`。
+- 限制：该结果仅验证 AnswerAgent → immutable answer bundle → GLM semantic judge → human golden evaluation 的闭环和鲁棒性；样本量只有 3，不作为最终泛化指标。

@@ -16,7 +16,7 @@ from paper_agent.domain import (
     SupportVerdict,
 )
 from paper_agent.retrieval.reranker import RerankedHit
-from paper_agent.llm.client import TransformersStructuredClient
+from paper_agent.llm.client import GlmStructuredClient, TransformersStructuredClient
 
 
 def hit() -> RerankedHit:
@@ -64,6 +64,22 @@ def test_local_client_extracts_fenced_json():
     assert TransformersStructuredClient._extract_json(content) == '{"answer": "ok"}'
 
 
+def test_local_client_extracts_first_balanced_json():
+    content = '<answer>{"answer": "ok", "text": "{not a brace}"}</answer>\nextra {"ignored": true}'
+    assert TransformersStructuredClient._extract_json(content) == '{"answer": "ok", "text": "{not a brace}"}'
+
+
+def test_glm_client_extracts_json_before_extra_data():
+    content = '<answer>{"assessments": []}</answer>\n<think>extra explanation</think>\n{"ignored": true}'
+    assert GlmStructuredClient._extract_json(content) == {"assessments": []}
+
+
+def test_glm_client_rejects_copied_json_schema():
+    content = '<answer>{"$defs": {}, "properties": {}, "title": "ClaimSupportAssessment", "type": "object"}</answer>'
+    with pytest.raises(ValueError, match="JSON Schema"):
+        GlmStructuredClient._extract_json(content)
+
+
 class FakeJudgeClient:
     def generate_structured(self, prompt, response_model):
         assert "Claim 1" in prompt and "[E1]" in prompt
@@ -79,6 +95,32 @@ class FakeJudgeClient:
         )
 
 
+class IncompleteThenSingleJudgeClient:
+    def __init__(self):
+        self.calls = 0
+
+    def generate_structured(self, prompt, response_model):
+        self.calls += 1
+        if self.calls == 1:
+            return SemanticCitationReport(
+                assessments=[
+                    ClaimSupportAssessment(
+                        claim_index=1,
+                        verdict=SupportVerdict.SUPPORTED,
+                        evidence_ids=["E1"],
+                        reasoning_summary="Only the first claim was judged.",
+                    )
+                ]
+            )
+        claim_index = 1 if "claim_index=1" in prompt else 2
+        return ClaimSupportAssessment(
+            claim_index=claim_index,
+            verdict=SupportVerdict.SUPPORTED,
+            evidence_ids=["E1"],
+            reasoning_summary="The single-claim fallback judged this claim.",
+        )
+
+
 def test_semantic_judge_assesses_each_claim():
     pack = build_evidence_pack("question", [hit()])
     answer = GroundedAnswer(
@@ -87,6 +129,22 @@ def test_semantic_judge_assesses_each_claim():
     )
     report = SemanticCitationJudge(FakeJudgeClient()).evaluate(answer, pack)
     assert report.all_supported
+
+
+def test_semantic_judge_falls_back_when_batch_is_incomplete():
+    pack = build_evidence_pack("question", [hit()])
+    answer = GroundedAnswer(
+        answer="answer",
+        claims=[
+            AnswerClaim(text="It uses learnable queries.", evidence_ids=["E1"]),
+            AnswerClaim(text="It extracts visual features.", evidence_ids=["E1"]),
+        ],
+    )
+    client = IncompleteThenSingleJudgeClient()
+    report = SemanticCitationJudge(client).evaluate(answer, pack)
+    assert [item.claim_index for item in report.assessments] == [1, 2]
+    assert report.all_supported
+    assert client.calls == 3
 
 
 def test_semantic_judge_skips_abstention():

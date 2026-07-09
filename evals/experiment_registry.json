@@ -162,6 +162,37 @@
     "limitations": "The frozen development set contains 16 queries over three papers. Results are suitable as a development ablation, not a final held-out benchmark."
   },
   {
+    "experiment_id": "citation_judge_smoke_v1_3",
+    "date": "2026-07-09",
+    "category": "answer_citation_evaluation",
+    "status": "completed",
+    "dataset": {
+      "name": "citation_golden.v1.json",
+      "cases": 3,
+      "claims": 6,
+      "case_ids": [
+        "cfm",
+        "blip2_qformer_bridge",
+        "gpt4_learning_rate"
+      ]
+    },
+    "variant": {
+      "generator": "Qwen3-VL-8B-Instruct",
+      "judge": "GLM-4.1V-9B-Thinking",
+      "execution": "sequential offline judging",
+      "outputs": "artifacts/evals/citation_judge.v1.json"
+    },
+    "metrics": {
+      "claim_accuracy": 1.0,
+      "macro_f1": 1.0,
+      "supported_precision": 1.0,
+      "supported_recall": 1.0,
+      "abstention_accuracy": 1.0
+    },
+    "conclusion": "The answer-generation and independent semantic citation judge pipeline completed successfully on two supported-answer cases and one abstention case.",
+    "limitations": "Only three manually labeled smoke cases; this validates the evaluation loop and structured-output robustness, not final citation-judge generalization."
+  },
+  {
     "experiment_id": "retrieval_ablation_v1",
     "date": null,
     "category": "retrieval_ablation",

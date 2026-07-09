@@ -131,10 +131,44 @@ class TransformersStructuredClient:
         fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", stripped, re.DOTALL)
         if fenced:
             return fenced.group(1)
-        start, end = stripped.find("{"), stripped.rfind("}")
-        if start < 0 or end < start:
-            raise ValueError("local model did not return a JSON object")
-        return stripped[start : end + 1]
+        return _extract_first_json_object(stripped)
+
+
+def _extract_first_json_object(content: str) -> str:
+    """Return the first balanced JSON object embedded in model output.
+
+    Local thinking models sometimes emit prose after the JSON object, or repeat
+    a corrected JSON object. A greedy ``rfind("}")`` slice turns that into
+    invalid JSON with "Extra data". This scanner keeps string escaping rules and
+    stops at the first balanced top-level object.
+    """
+    start = content.find("{")
+    if start < 0:
+        raise ValueError("local model did not return a JSON object")
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, char in enumerate(content[start:], start=start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return content[start : index + 1]
+
+    raise ValueError("local model returned an incomplete JSON object")
 
 
 class GlmStructuredClient:
@@ -170,14 +204,15 @@ class GlmStructuredClient:
         )
 
     def generate_structured(self, prompt: str, response_model: type[T]) -> T:
-        schema = json.dumps(response_model.model_json_schema(), ensure_ascii=False)
+        instruction = self._format_instruction(response_model)
         messages = [{
             "role": "user",
             "content": [{
                 "type": "text",
                 "text": (
-                    "Return exactly one JSON object matching this schema in the answer tag. "
-                    f"Schema: {schema}\n\nTask:\n{prompt}"
+                    "Return exactly one JSON object in the answer tag. "
+                    "Do not return a JSON Schema. Do not explain outside JSON. "
+                    f"{instruction}\n\nTask:\n{prompt}"
                 ),
             }],
         }]
@@ -198,10 +233,36 @@ class GlmStructuredClient:
         return response_model.model_validate(self._extract_json(content))
 
     @staticmethod
+    def _format_instruction(response_model: type[BaseModel]) -> str:
+        model_name = response_model.__name__
+        if model_name == "ClaimSupportAssessment":
+            return (
+                "Fill this JSON template with the actual judgment:\n"
+                '{"claim_index": 1, "verdict": "supported", '
+                '"evidence_ids": ["E1"], '
+                '"reasoning_summary": "Short reason grounded in the cited evidence."}\n'
+                'Allowed verdict values: "supported", "partially_supported", "unsupported".'
+            )
+        if model_name == "SemanticCitationReport":
+            return (
+                "Fill this JSON template with one assessment for each claim:\n"
+                '{"assessments": ['
+                '{"claim_index": 1, "verdict": "supported", '
+                '"evidence_ids": ["E1"], '
+                '"reasoning_summary": "Short reason grounded in the cited evidence."}'
+                "]}\n"
+                'Allowed verdict values: "supported", "partially_supported", "unsupported".'
+            )
+        schema = json.dumps(response_model.model_json_schema(), ensure_ascii=False)
+        return "Required JSON Schema: " + schema
+
+    @staticmethod
     def _extract_json(content: str) -> dict:
         answer = re.search(r"<answer>\s*(.*?)\s*</answer>", content, re.DOTALL)
         candidate = answer.group(1) if answer else content
-        value = json.loads(TransformersStructuredClient._extract_json(candidate))
+        value = json.loads(_extract_first_json_object(candidate.strip()))
         if not isinstance(value, dict):
             raise ValueError("GLM judge must return a JSON object")
+        if {"$defs", "properties", "title", "type"}.issubset(value):
+            raise ValueError("GLM judge returned a JSON Schema instead of a JSON instance")
         return value

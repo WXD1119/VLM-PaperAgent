@@ -1,9 +1,12 @@
 from paper_agent.domain.answer import (
+    AnswerClaim,
     CitationValidation,
+    ClaimSupportAssessment,
     EvidenceItem,
     EvidencePack,
     GroundedAnswer,
     SemanticCitationReport,
+    SupportVerdict,
 )
 from paper_agent.llm.client import LLMClient
 from paper_agent.retrieval.reranker import RerankedHit
@@ -82,7 +85,13 @@ class AnswerAgent:
 
 
 class SemanticCitationJudge:
-    """Judge whether each claim is entailed by its cited evidence in one batched LLM call."""
+    """Judge whether each claim is entailed by its cited evidence.
+
+    The judge first tries one batched LLM call for efficiency. If the model omits,
+    duplicates, or misnumbers claim assessments, it falls back to one call per
+    claim. This keeps evaluation robust with local thinking models whose JSON is
+    valid but not always schema-complete.
+    """
 
     def __init__(self, client: LLMClient) -> None:
         self.client = client
@@ -104,12 +113,48 @@ class SemanticCitationJudge:
                 item = evidence[evidence_id]
                 blocks.append(f"[{evidence_id}] {item.content}")
         report = self.client.generate_structured("\n\n".join(blocks), SemanticCitationReport)
-        expected = set(range(1, len(answer.claims) + 1))
+        if self._is_complete(report, len(answer.claims)):
+            return self._validate_evidence_ids(report, set(evidence))
+
+        assessments = [
+            self._evaluate_single_claim(index, claim, evidence)
+            for index, claim in enumerate(answer.claims, start=1)
+        ]
+        return self._validate_evidence_ids(
+            SemanticCitationReport(assessments=assessments), set(evidence)
+        )
+
+    @staticmethod
+    def _is_complete(report: SemanticCitationReport, claim_count: int) -> bool:
+        expected = set(range(1, claim_count + 1))
         actual = {item.claim_index for item in report.assessments}
-        if actual != expected or len(report.assessments) != len(answer.claims):
-            raise ValueError("semantic judge must assess every claim exactly once")
-        allowed = set(evidence)
+        return actual == expected and len(report.assessments) == claim_count
+
+    @staticmethod
+    def _validate_evidence_ids(
+        report: SemanticCitationReport, allowed: set[str]
+    ) -> SemanticCitationReport:
         for assessment in report.assessments:
             if not set(assessment.evidence_ids).issubset(allowed):
                 raise ValueError("semantic judge returned an unknown evidence ID")
         return report
+
+    def _evaluate_single_claim(
+        self,
+        index: int,
+        claim: AnswerClaim,
+        evidence: dict[str, EvidenceItem],
+    ) -> ClaimSupportAssessment:
+        blocks = [
+            "Evaluate exactly one claim using only its cited evidence. "
+            f"Return exactly one assessment with claim_index={index}. "
+            "Use supported only when all material details are directly supported; use "
+            "partially_supported for overstatement, and unsupported for contradiction or absence.",
+            f"Claim {index}: {claim.text}",
+        ]
+        for evidence_id in claim.evidence_ids:
+            item = evidence[evidence_id]
+            blocks.append(f"[{evidence_id}] {item.content}")
+
+        assessment = self.client.generate_structured("\n\n".join(blocks), ClaimSupportAssessment)
+        return assessment.model_copy(update={"claim_index": index})

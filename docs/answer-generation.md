@@ -40,3 +40,20 @@ Human citation evaluation uses saved answer bundles rather than regenerated text
 each claim as supported, partially supported, or unsupported while viewing only its cited evidence.
 The judge is scored with claim accuracy, macro F1, supported precision/recall, and abstention
 accuracy. Model verdicts are never copied into the human Golden Set.
+
+## Local judge robustness notes
+
+GLM-4.1V-9B-Thinking is used as an offline semantic citation judge, but local thinking models do
+not always produce clean structured output. The judge client therefore treats structured generation
+as an engineering boundary rather than a given:
+
+- It extracts the first balanced JSON object so trailing `<think>` text or repeated JSON snippets do
+  not break parsing with `Extra data`.
+- It rejects copied JSON Schema objects explicitly; the GLM prompt uses concrete JSON templates for
+  `SemanticCitationReport` and `ClaimSupportAssessment` instead of exposing only a schema.
+- It first tries batched claim judging for throughput, then falls back to one-claim-at-a-time
+  judging if the batch omits, duplicates, or misnumbers claim assessments.
+- It still validates evidence IDs after model generation, so the fallback cannot introduce
+  citations outside the immutable evidence pack.
+
+This makes the judge slower in difficult cases but materially more reliable for offline evaluation.
