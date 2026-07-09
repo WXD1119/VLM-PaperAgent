@@ -243,3 +243,29 @@ curl -X POST http://127.0.0.1:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"query": "How does Q-Former bridge the frozen image encoder and frozen language model?", "top_k": 5}'
 ```
+
+## Lightweight evidence graph
+
+The first graph backend is a reproducible JSONL intermediate representation rather than a required
+Neo4j service. It records paper, section, chunk, query, answer and claim nodes plus traceability
+edges such as `HAS_SECTION`, `HAS_CHUNK`, `HAS_CLAIM` and `SUPPORTED_BY`.
+
+Build a graph from all parsed papers, chunks and saved answer bundles:
+
+```bash
+python scripts/build_graph.py \
+  --papers artifacts/papers \
+  --answers artifacts/answers \
+  --output artifacts/graph
+```
+
+Inspect and validate graph invariants:
+
+```bash
+python scripts/inspect_graph.py --graph artifacts/graph --show-errors
+```
+
+Correctness is checked by graph invariants rather than visual inspection: node IDs and edge IDs
+must be unique, every edge endpoint must exist, every paper must link to chunks, every claim must
+link to real evidence chunks, and `SUPPORTED_BY` edges must target `Chunk` nodes. The JSONL files
+can later be imported into Neo4j/Cypher without changing the graph-building logic.

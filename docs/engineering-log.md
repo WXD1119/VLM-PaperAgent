@@ -356,3 +356,11 @@
 - 运行配置通过环境变量注入：`PAPER_AGENT_CHUNKS`、`PAPER_AGENT_CHROMA_DB`、`PAPER_AGENT_EMBEDDING_MODEL`、`PAPER_AGENT_RERANKER_MODEL`、`PAPER_AGENT_LLM_MODEL`、`PAPER_AGENT_JUDGE_URL` 等。
 - `create_app(service=...)` 支持测试注入 fake service，新增 `tests/test_api.py` 验证 `/health` 和 `/ask` 的响应结构，不依赖真实 GPU 模型。
 - 当前 API 绑定建议使用 `127.0.0.1`，避免无鉴权服务暴露到公网；后续如做 Web UI，可由同机 Streamlit 或前端调用该本地 API。
+
+## 2026-07-09：Lightweight Evidence Graph MVP
+
+- 新增 `paper_agent.graph` 包，定义 `GraphNode`、`GraphEdge`、`GraphDocument`、`NodeType` 和 `EdgeType`，以 JSONL 作为 Neo4j 前的稳定中间表示。
+- `GraphBuilder` 从三类产物构图：`paper.json` 生成 Paper 节点，`chunks.json` 生成 Section/Chunk 层级，`*.answer.json` 生成 Query/Answer/Claim 节点与 `SUPPORTED_BY` 证据边。
+- 新增 `GraphValidator`，用不变量验证正确性：node/edge ID 唯一、所有边端点存在、Paper 至少包含 Chunk、Claim 必须有 `SUPPORTED_BY`、`SUPPORTED_BY` 必须指向 Chunk。
+- 新增 `scripts/build_graph.py` 和 `scripts/inspect_graph.py`。服务器运行时使用 `--papers artifacts/papers --answers artifacts/answers --output artifacts/graph` 即可纳入当前三篇论文与已保存问答。
+- 新增 `tests/test_graph.py`，覆盖 claim-to-chunk 证据边和坏边检测。后续可在该 JSONL 中间表示稳定后增加 Neo4j writer 和 Cypher 查询。
