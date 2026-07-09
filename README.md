@@ -177,3 +177,27 @@ CUDA_VISIBLE_DEVICES=2,3 python scripts/answer_question.py \
 API keys are read from environment variables and must never be committed. The first MVP sends
 MinerU text, equations, tables, and figure captions to a text LLM. Raw figure pixels will be routed
 to a vision model only when caption/OCR evidence is insufficient.
+
+## One-command demo
+
+`scripts/ask.py` is the presentation-friendly entry point. It runs hybrid retrieval, optional
+cross-encoder reranking, local answer generation, citation integrity validation, and writes the
+immutable answer bundle for later human or GLM judging.
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
+python scripts/ask.py \
+  --query "How does Q-Former bridge the frozen image encoder and frozen language model?" \
+  --chunks artifacts/papers \
+  --db artifacts/chroma \
+  --embedding-model artifacts/models/bge-m3 \
+  --reranker-model artifacts/models/bge-reranker-v2-m3 \
+  --model artifacts/models/Qwen3-VL-8B-Instruct \
+  --offline \
+  --device cuda:0 \
+  --llm-device cuda:1 \
+  --output artifacts/answers/demo.qformer.answer.json
+```
+
+Use `--no-rerank` for a faster RRF-only smoke test, `--paper-id` to restrict a query to one paper,
+and `--kind equation|table|figure|text` to inspect modality-specific evidence.

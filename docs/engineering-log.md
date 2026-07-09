@@ -331,3 +331,12 @@
   - Abstention Accuracy=1.0000。
 - 评测产物：`artifacts/evals/citation_judge.v1.json`；机器可读实验登记：`evals/experiment_registry.json` 的 `citation_judge_smoke_v1_3`。
 - 限制：该结果仅验证 AnswerAgent → immutable answer bundle → GLM semantic judge → human golden evaluation 的闭环和鲁棒性；样本量只有 3，不作为最终泛化指标。
+
+## 2026-07-09：一条命令端到端 Demo
+
+- 新增 `scripts/ask.py`，作为展示友好的端到端入口：RRF 混合检索、可选 BGE Cross-Encoder 精排、Qwen 本地回答、citation integrity validation 和 `AnswerBundle` 保存。
+- 默认使用 `artifacts/papers`、`artifacts/chroma`、`artifacts/models/bge-m3`、`artifacts/models/bge-reranker-v2-m3` 和 `artifacts/models/Qwen3-VL-8B-Instruct`，与服务器离线部署路径保持一致。
+- 输出分为 `Answer`、`Claims`、`Citation integrity`、`Evidence` 和 `Run` 五段，便于面试演示和日志截图。
+- 支持 `--no-rerank` 快速 smoke test，`--paper-id` 限定单篇论文，`--kind equation|table|figure|text` 检查特定模态证据。
+- 新增 `tests/test_ask_cli.py` 覆盖渲染函数，确保回答、claim citation、证据卡片和 validation 状态稳定展示。
+- 本地 Windows 环境仍受 Pydantic v1 限制，已完成 `py_compile` 与 `git diff --check`；完整 pytest 以服务器 `paper-agent` 环境为准。
