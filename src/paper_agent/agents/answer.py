@@ -75,8 +75,19 @@ class AnswerAgent:
         self.client = client
         self.validator = CitationValidator()
 
-    def answer(self, pack: EvidencePack) -> tuple[GroundedAnswer, CitationValidation]:
+    def answer(
+        self,
+        pack: EvidencePack,
+        feedback: str | None = None,
+    ) -> tuple[GroundedAnswer, CitationValidation]:
         prompt = f"{SYSTEM_PROMPT}\n\n{render_evidence_prompt(pack)}"
+        if feedback:
+            prompt += (
+                "\n\nRevision feedback from the citation judge:\n"
+                f"{feedback}\n"
+                "Revise the answer using only the supplied evidence. Remove or soften any claim "
+                "that is not directly supported. If the evidence is insufficient, abstain."
+            )
         answer = self.client.generate_structured(prompt, GroundedAnswer)
         report = self.validator.validate(answer, pack)
         if not report.valid:

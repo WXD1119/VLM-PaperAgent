@@ -2,9 +2,9 @@ import argparse
 import os
 from pathlib import Path
 
-from paper_agent.agents import AnswerAgent, build_evidence_pack
-from paper_agent.domain import AnswerBundle, ChunkKind
-from paper_agent.llm import OpenAICompatibleClient, TransformersStructuredClient
+from paper_agent.agents import AnswerAgent, CitationValidator, SemanticCitationJudge, build_evidence_pack
+from paper_agent.domain import AnswerBundle, ChunkKind, GroundedAnswer, SemanticCitationReport
+from paper_agent.llm import OpenAICompatibleClient, RemoteStructuredClient, TransformersStructuredClient
 from paper_agent.retrieval import (
     BM25Index,
     CrossEncoderReranker,
@@ -64,6 +64,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kind", choices=[kind.value for kind in ChunkKind], default=None)
     parser.add_argument("--output", type=Path, default=Path("artifacts/answers/ask.answer.json"))
     parser.add_argument(
+        "--judge-url",
+        default=None,
+        help=(
+            "Optional local judge service URL. When set, ask.py verifies semantic citation "
+            "support before publishing the final answer."
+        ),
+    )
+    parser.add_argument(
+        "--max-answer-attempts",
+        type=int,
+        default=2,
+        help="Maximum answer generation attempts when --judge-url is enabled.",
+    )
+    parser.add_argument(
         "--content-chars",
         type=int,
         default=700,
@@ -95,6 +109,90 @@ def build_llm_client(args: argparse.Namespace):
     if not api_key:
         raise SystemExit(f"environment variable {args.api_key_env} is required")
     return OpenAICompatibleClient(args.model, api_key, args.base_url)
+
+
+def build_judge_feedback(report: SemanticCitationReport) -> str:
+    lines = []
+    for assessment in report.assessments:
+        if assessment.verdict.value == "supported":
+            continue
+        evidence = ", ".join(assessment.evidence_ids) or "(none)"
+        lines.append(
+            f"Claim {assessment.claim_index} was judged {assessment.verdict.value} "
+            f"using evidence {evidence}: {assessment.reasoning_summary}"
+        )
+    return "\n".join(lines)
+
+
+def abstain_after_failed_gate(query: str, attempts: int) -> GroundedAnswer:
+    return GroundedAnswer(
+        answer="I cannot provide a fully citation-supported answer from the retrieved evidence.",
+        abstained=True,
+        abstention_reason=(
+            "The semantic citation judge did not support all generated claims after "
+            f"{attempts} attempt(s) for query: {query}"
+        ),
+    )
+
+
+def answer_with_optional_semantic_gate(
+    *,
+    agent: AnswerAgent,
+    pack,
+    judge: SemanticCitationJudge | None,
+    max_attempts: int,
+) -> tuple[AnswerBundle, SemanticCitationReport | None, int, bool]:
+    attempts = max(1, max_attempts)
+    feedback: str | None = None
+    last_answer = None
+    last_validation = None
+    last_report: SemanticCitationReport | None = None
+
+    for attempt in range(1, attempts + 1):
+        answer, validation = agent.answer(pack, feedback=feedback)
+        last_answer, last_validation = answer, validation
+        if judge is None or answer.abstained:
+            return (
+                AnswerBundle(
+                    evidence_pack=pack,
+                    answer=answer,
+                    citation_validation=validation,
+                    generator_model="",
+                ),
+                None,
+                attempt,
+                False,
+            )
+        report = judge.evaluate(answer, pack)
+        last_report = report
+        if report.all_supported:
+            return (
+                AnswerBundle(
+                    evidence_pack=pack,
+                    answer=answer,
+                    citation_validation=validation,
+                    generator_model="",
+                ),
+                report,
+                attempt,
+                True,
+            )
+        feedback = build_judge_feedback(report)
+
+    assert last_answer is not None and last_validation is not None
+    safe_answer = abstain_after_failed_gate(pack.query, attempts)
+    safe_validation = CitationValidator().validate(safe_answer, pack)
+    return (
+        AnswerBundle(
+            evidence_pack=pack,
+            answer=safe_answer,
+            citation_validation=safe_validation,
+            generator_model="",
+        ),
+        last_report,
+        attempts,
+        True,
+    )
 
 
 def clip_text(text: str, limit: int) -> str:
@@ -160,22 +258,44 @@ def render_bundle(bundle: AnswerBundle, *, content_chars: int = 700) -> str:
 
 def main() -> None:
     args = parse_args()
+    if args.max_answer_attempts < 1:
+        raise SystemExit("--max-answer-attempts must be at least 1")
     retriever = build_demo_retriever(args)
     kind = ChunkKind(args.kind) if args.kind else None
     hits = retriever.search(args.query, args.top_k, paper_id=args.paper_id, kind=kind)
     pack = build_evidence_pack(args.query, hits)
-    answer, validation = AnswerAgent(build_llm_client(args)).answer(pack)
-    bundle = AnswerBundle(
-        evidence_pack=pack,
-        answer=answer,
-        citation_validation=validation,
-        generator_model=args.model,
+    judge = (
+        SemanticCitationJudge(RemoteStructuredClient(args.judge_url))
+        if args.judge_url
+        else None
     )
+    bundle, semantic_report, attempts, semantic_gate_enabled = answer_with_optional_semantic_gate(
+        agent=AnswerAgent(build_llm_client(args)),
+        pack=pack,
+        judge=judge,
+        max_attempts=args.max_answer_attempts,
+    )
+    bundle = bundle.model_copy(update={"generator_model": args.model})
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(bundle.model_dump_json(indent=2), encoding="utf-8")
 
     print(render_bundle(bundle, content_chars=args.content_chars))
+    if semantic_gate_enabled:
+        print("\n# Semantic citation gate")
+        if bundle.answer.abstained:
+            print("Status: ABSTAINED")
+        elif semantic_report and semantic_report.all_supported:
+            print("Status: PASS")
+        else:
+            print("Status: FAIL")
+        print(f"Attempts: {attempts}")
+        if semantic_report:
+            for item in semantic_report.assessments:
+                print(
+                    f"- claim={item.claim_index} verdict={item.verdict.value} "
+                    f"evidence={item.evidence_ids}: {item.reasoning_summary}"
+                )
     print("\n# Run")
     print(f"retriever={'RRF' if args.no_rerank else 'RRF+BGE-reranker'}")
     print(f"embedding_model={args.embedding_model}")

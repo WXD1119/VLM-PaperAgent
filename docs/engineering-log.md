@@ -340,3 +340,11 @@
 - 支持 `--no-rerank` 快速 smoke test，`--paper-id` 限定单篇论文，`--kind equation|table|figure|text` 检查特定模态证据。
 - 新增 `tests/test_ask_cli.py` 覆盖渲染函数，确保回答、claim citation、证据卡片和 validation 状态稳定展示。
 - 本地 Windows 环境仍受 Pydantic v1 限制，已完成 `py_compile` 与 `git diff --check`；完整 pytest 以服务器 `paper-agent` 环境为准。
+
+## 2026-07-09：运行时 Semantic Gate
+
+- 明确区分两种 judge 用法：离线评测用于衡量 AnswerAgent 质量；运行时 gate 用于阻止 unsupported answer 对用户发布。
+- `AnswerAgent.answer()` 支持注入 citation judge feedback，用于在不改变 EvidencePack 的前提下重写或收敛 claim。
+- `scripts/ask.py` 新增 `--judge-url` 与 `--max-answer-attempts`：开启后执行 Answer → Semantic Judge → Feedback Revision；若最终仍未全 supported，则输出显式 abstention，而不是输出未通过审查的答案。
+- `serve_glm_judge.py` 同步加入首个括号配平 JSON 提取、JSON Schema 复读检测和面向 `SemanticCitationReport` / `ClaimSupportAssessment` 的具体 JSON 模板，保证 HTTP judge service 与离线 `judge_answer.py` 的鲁棒性一致。
+- 新增单元测试覆盖 semantic gate 重试成功和重试失败后拒答两条路径。

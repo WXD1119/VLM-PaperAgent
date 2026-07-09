@@ -26,14 +26,63 @@ def extract_json(text: str) -> dict:
     if fenced:
         candidate = fenced.group(1)
     else:
-        start, end = candidate.find("{"), candidate.rfind("}")
-        if start < 0 or end < start:
-            raise ValueError("GLM judge did not return a JSON object")
-        candidate = candidate[start : end + 1]
+        candidate = extract_first_json_object(candidate)
     value = json.loads(candidate)
     if not isinstance(value, dict):
         raise ValueError("GLM judge must return a JSON object")
+    if {"$defs", "properties", "title", "type"}.issubset(value):
+        raise ValueError("GLM judge returned a JSON Schema instead of a JSON instance")
     return value
+
+
+def extract_first_json_object(text: str) -> str:
+    start = text.find("{")
+    if start < 0:
+        raise ValueError("GLM judge did not return a JSON object")
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text[start:], start=start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    raise ValueError("GLM judge returned an incomplete JSON object")
+
+
+def format_instruction(schema: dict) -> str:
+    title = schema.get("title")
+    if title == "ClaimSupportAssessment":
+        return (
+            "Fill this JSON template with the actual judgment:\n"
+            '{"claim_index": 1, "verdict": "supported", '
+            '"evidence_ids": ["E1"], '
+            '"reasoning_summary": "Short reason grounded in the cited evidence."}\n'
+            'Allowed verdict values: "supported", "partially_supported", "unsupported".'
+        )
+    if title == "SemanticCitationReport":
+        return (
+            "Fill this JSON template with one assessment for each claim:\n"
+            '{"assessments": ['
+            '{"claim_index": 1, "verdict": "supported", '
+            '"evidence_ids": ["E1"], '
+            '"reasoning_summary": "Short reason grounded in the cited evidence."}'
+            "]}\n"
+            'Allowed verdict values: "supported", "partially_supported", "unsupported".'
+        )
+    return "Required JSON Schema: " + json.dumps(schema, ensure_ascii=False)
 
 
 def create_app(model_path: str, max_memory_gib: int, max_new_tokens: int) -> FastAPI:
@@ -61,14 +110,15 @@ def create_app(model_path: str, max_memory_gib: int, max_new_tokens: int) -> Fas
 
     @app.post("/generate", response_model=GenerateResponse)
     def generate(request: GenerateRequest) -> GenerateResponse:
-        schema = json.dumps(request.schema, ensure_ascii=False)
+        instruction = format_instruction(request.schema)
         messages = [{
             "role": "user",
             "content": [{
                 "type": "text",
                 "text": (
-                    "Return exactly one JSON object matching this schema. Do not put prose in "
-                    f"the answer tag.\nSchema: {schema}\n\nTask:\n{request.prompt}"
+                    "Return exactly one JSON object in the answer tag. "
+                    "Do not return a JSON Schema. Do not explain outside JSON. "
+                    f"{instruction}\n\nTask:\n{request.prompt}"
                 ),
             }],
         }]

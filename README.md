@@ -201,3 +201,18 @@ python scripts/ask.py \
 
 Use `--no-rerank` for a faster RRF-only smoke test, `--paper-id` to restrict a query to one paper,
 and `--kind equation|table|figure|text` to inspect modality-specific evidence.
+
+When the local GLM judge service is running, add `--judge-url` to turn the demo into a guarded
+generate-then-verify loop. Unsupported claims are fed back to the answer model for revision; if the
+answer still cannot pass after `--max-answer-attempts`, the script emits a safe abstention instead
+of publishing an unsupported answer.
+
+```bash
+python scripts/ask.py \
+  --query "How does Q-Former bridge the frozen image encoder and frozen language model?" \
+  --offline \
+  --device cuda:0 \
+  --llm-device cuda:1 \
+  --judge-url http://127.0.0.1:8765 \
+  --max-answer-attempts 2
+```
