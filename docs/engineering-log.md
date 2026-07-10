@@ -364,3 +364,9 @@
 - 新增 `GraphValidator`，用不变量验证正确性：node/edge ID 唯一、所有边端点存在、Paper 至少包含 Chunk、Claim 必须有 `SUPPORTED_BY`、`SUPPORTED_BY` 必须指向 Chunk。
 - 新增 `scripts/build_graph.py` 和 `scripts/inspect_graph.py`。服务器运行时使用 `--papers artifacts/papers --answers artifacts/answers --output artifacts/graph` 即可纳入当前三篇论文与已保存问答。
 - 新增 `tests/test_graph.py`，覆盖 claim-to-chunk 证据边和坏边检测。后续可在该 JSONL 中间表示稳定后增加 Neo4j writer 和 Cypher 查询。
+
+## 2026-07-10：Evidence Graph 查询入口
+
+- 新增 `GraphQuery` 内存查询辅助类和 `scripts/query_graph.py`，支持列出 Paper、查看单篇论文 Chunk、列出 Claim → Evidence Chunk 支撑链、按关键词检索节点。
+- 查询入口用于验证图谱不只是可生成，也能回答“读过哪些论文”“某篇论文有哪些证据块”“某条 claim 被哪些 chunk 支撑”等审计问题。
+- `tests/test_graph.py` 增加查询覆盖，确保 Paper/Chunk/Claim support/search 四类查询都基于同一份图中间表示。

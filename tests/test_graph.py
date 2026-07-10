@@ -16,7 +16,15 @@ from paper_agent.domain import (
     Paper,
     RetrievalChunk,
 )
-from paper_agent.graph import EdgeType, GraphBuilder, GraphDocument, GraphEdge, GraphValidator
+from paper_agent.graph import (
+    EdgeType,
+    GraphBuilder,
+    GraphDocument,
+    GraphEdge,
+    GraphQuery,
+    GraphValidator,
+    NodeType,
+)
 
 
 def sample_paper() -> Paper:
@@ -121,3 +129,22 @@ def test_graph_validator_rejects_missing_edge_target():
 
     assert not report.valid
     assert any("missing target" in error for error in report.errors)
+
+
+def test_graph_query_lists_papers_chunks_claim_supports_and_search():
+    builder = GraphBuilder()
+    builder.add_papers([sample_paper()])
+    builder.add_chunks([sample_chunks()])
+    builder.add_answers([sample_answer()])
+    query = GraphQuery(builder.build())
+
+    papers = query.papers()
+    chunks = query.chunks_for_paper("paper-1")
+    supports = query.claim_supports()
+    matches = query.search_nodes("learnable", node_types=[NodeType.CHUNK, NodeType.CLAIM])
+
+    assert [paper.properties["paper_id"] for paper in papers] == ["paper-1"]
+    assert [chunk.properties["chunk_id"] for chunk in chunks] == ["chunk-1"]
+    assert supports[0][0].node_type == NodeType.CLAIM
+    assert supports[0][1][0].properties["chunk_id"] == "chunk-1"
+    assert {node.node_type for node in matches} == {NodeType.CHUNK, NodeType.CLAIM}

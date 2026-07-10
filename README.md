@@ -265,6 +265,22 @@ Inspect and validate graph invariants:
 python scripts/inspect_graph.py --graph artifacts/graph --show-errors
 ```
 
+Query the graph:
+
+```bash
+python scripts/query_graph.py --graph artifacts/graph --papers
+
+python scripts/query_graph.py \
+  --graph artifacts/graph \
+  --paper-id paper_6bc5d399d6127a64 \
+  --chunks \
+  --limit 5
+
+python scripts/query_graph.py --graph artifacts/graph --claim-supports --limit 10
+
+python scripts/query_graph.py --graph artifacts/graph --search "Q-Former" --node-type Claim
+```
+
 Correctness is checked by graph invariants rather than visual inspection: node IDs and edge IDs
 must be unique, every edge endpoint must exist, every paper must link to chunks, every claim must
 link to real evidence chunks, and `SUPPORTED_BY` edges must target `Chunk` nodes. The JSONL files
