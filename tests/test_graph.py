@@ -28,6 +28,7 @@ from paper_agent.graph import (
     GraphDelta,
     LocalGraphWorkspaceStore,
     NodeType,
+    diff_graphs,
     write_graph_jsonl,
 )
 
@@ -296,3 +297,85 @@ def test_graph_workspace_delta_tombstone_hides_node_and_incident_edges(tmp_path)
         edge.source_id != chunk.node_id and edge.target_id != chunk.node_id
         for edge in effective_graph.edges
     )
+
+
+def test_graph_workspace_commit_delta_adds_records_and_diff_keeps_base_unchanged(tmp_path):
+    builder = GraphBuilder()
+    builder.add_papers([sample_paper()])
+    builder.add_chunks([sample_chunks()])
+    builder.add_answers([sample_answer()])
+    base_graph = builder.build()
+    base_dir = tmp_path / "base_graph"
+    write_graph_jsonl(base_graph, base_dir)
+    base_edges_before = (base_dir / "edges.jsonl").read_text(encoding="utf-8")
+    chunk = next(node for node in base_graph.nodes if node.node_type == NodeType.CHUNK)
+    concept = GraphNode(
+        node_id="concept:private-note",
+        node_type=NodeType.CONCEPT,
+        label="private note",
+        properties={"normalized": "private-note", "aliases": ["private note"]},
+    )
+    mention = GraphEdge(
+        edge_id="edge:private-note-mentioned",
+        source_id=chunk.node_id,
+        target_id=concept.node_id,
+        edge_type=EdgeType.MENTIONS,
+        properties={"source_kind": "chunk", "mention": "private note"},
+    )
+
+    store = LocalGraphWorkspaceStore(tmp_path / "workspace")
+    store.create_fork(
+        base_graph_path=base_dir,
+        workspace_id="ws-test",
+        owner_id="wxd",
+    )
+    commit = store.commit_delta(
+        GraphDelta(added_nodes=[concept], added_edges=[mention]),
+        author_id="wxd",
+        message="add private concept",
+    )
+    effective_graph = store.load_effective_graph()
+    diff = diff_graphs(base_graph, effective_graph)
+    report = GraphValidator().validate(effective_graph)
+
+    assert commit.stats == {
+        "added_nodes": 1,
+        "added_edges": 1,
+        "removed_nodes": 0,
+        "removed_edges": 0,
+    }
+    assert report.valid
+    assert "concept:private-note" in diff.added_node_ids
+    assert "edge:private-note-mentioned" in diff.added_edge_ids
+    assert diff.added_node_types == {"Concept": 1}
+    assert diff.added_edge_types == {"MENTIONS": 1}
+    assert (base_dir / "edges.jsonl").read_text(encoding="utf-8") == base_edges_before
+
+
+def test_graph_workspace_preview_delta_detects_invalid_effective_graph(tmp_path):
+    builder = GraphBuilder()
+    builder.add_papers([sample_paper()])
+    builder.add_chunks([sample_chunks()])
+    builder.add_answers([sample_answer()])
+    base_graph = builder.build()
+    base_dir = tmp_path / "base_graph"
+    write_graph_jsonl(base_graph, base_dir)
+    chunk = next(node for node in base_graph.nodes if node.node_type == NodeType.CHUNK)
+    bad_edge = GraphEdge(
+        edge_id="edge:bad-private",
+        source_id=chunk.node_id,
+        target_id=chunk.node_id,
+        edge_type=EdgeType.MENTIONS,
+    )
+
+    store = LocalGraphWorkspaceStore(tmp_path / "workspace")
+    store.create_fork(
+        base_graph_path=base_dir,
+        workspace_id="ws-test",
+        owner_id="wxd",
+    )
+    preview = store.preview_delta(GraphDelta(added_edges=[bad_edge]))
+    report = GraphValidator().validate(preview)
+
+    assert not report.valid
+    assert any("MENTIONS must target Concept" in error for error in report.errors)

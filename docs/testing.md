@@ -127,3 +127,27 @@ Expected validation properties:
 - the initial effective graph has the same visible nodes/edges as the base graph;
 - workspace commits form a parent chain from root to head;
 - tombstoned nodes are hidden together with their incident edges.
+
+Workspace delta validation:
+
+```bash
+python scripts/commit_graph_delta.py \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --nodes artifacts/tmp/new_nodes.jsonl \
+  --edges artifacts/tmp/new_edges.jsonl \
+  --author wxd \
+  --message "add private graph records"
+
+python scripts/diff_graph.py \
+  --base artifacts/graph \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --show-ids
+```
+
+Expected properties:
+
+- committing a delta advances `head_commit_id`;
+- base graph JSONL files are not rewritten;
+- effective graph contains base records plus added delta records;
+- diff reports added/removed node and edge IDs and their type counters;
+- invalid deltas are rejected before commit unless `--allow-invalid` is explicitly used.

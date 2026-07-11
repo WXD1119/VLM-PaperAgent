@@ -326,6 +326,20 @@ Deliverables:
 - `scripts/diff_graph.py`
 - tests for added papers, added answers and tombstone behavior.
 
+Current P2 implementation:
+
+- `GraphDelta` can add nodes, add edges, hide nodes and hide edges.
+- `LocalGraphWorkspaceStore.commit_delta()` appends immutable delta commits and advances
+  the workspace head.
+- `LocalGraphWorkspaceStore.preview_delta()` simulates a delta before writing it.
+- `diff_graphs()` compares a base graph and a workspace effective graph by node/edge ID
+  and summarizes added/removed node and edge types.
+- `scripts/commit_graph_delta.py` commits JSONL node/edge deltas after validation.
+- `scripts/diff_graph.py` reports the difference between a base graph and a workspace
+  effective graph.
+- Tests cover added records, base graph immutability, diff summaries and invalid delta
+  detection.
+
 ### P3: Workspace-aware API
 
 Expose workspace IDs through `/ask` and graph endpoints.

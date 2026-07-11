@@ -325,6 +325,29 @@ The P1 workspace implementation stores a base graph pointer plus immutable works
 The effective graph is loaded as `base graph + workspace deltas - tombstones`; base JSONL files
 are not rewritten by fork operations.
 
+Commit a graph delta into a workspace:
+
+```bash
+python scripts/commit_graph_delta.py \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --nodes artifacts/tmp/new_nodes.jsonl \
+  --edges artifacts/tmp/new_edges.jsonl \
+  --author wxd \
+  --message "add private graph records"
+```
+
+Compare the base graph with the workspace effective graph:
+
+```bash
+python scripts/diff_graph.py \
+  --base artifacts/graph \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --show-ids
+```
+
+Delta commits are validated before they are written. Use `--allow-invalid` only for debugging
+conflict or tombstone scenarios that intentionally break the effective graph invariants.
+
 ## Product service plan
 
 The product-facing design separates lower-level modules from user-facing services.

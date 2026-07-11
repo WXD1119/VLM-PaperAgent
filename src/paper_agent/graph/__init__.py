@@ -6,10 +6,13 @@ from .model import EdgeType, GraphDocument, GraphEdge, GraphNode, NodeType
 from .query import ConceptNeighborhood, GraphQuery
 from .validation import GraphValidationReport, GraphValidator
 from .workspace import (
+    GraphDiff,
     GraphCommit,
     GraphDelta,
     GraphWorkspace,
     LocalGraphWorkspaceStore,
+    apply_delta,
+    diff_graphs,
 )
 
 __all__ = [
@@ -20,6 +23,7 @@ __all__ = [
     "GraphEdge",
     "GraphNode",
     "GraphQuery",
+    "GraphDiff",
     "GraphValidationReport",
     "GraphValidator",
     "GraphCommit",
@@ -27,6 +31,8 @@ __all__ = [
     "GraphWorkspace",
     "LocalGraphWorkspaceStore",
     "NodeType",
+    "apply_delta",
+    "diff_graphs",
     "read_graph_jsonl",
     "write_graph_jsonl",
 ]

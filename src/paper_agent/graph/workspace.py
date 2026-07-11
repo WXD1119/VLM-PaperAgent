@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,17 @@ class GraphDelta(BaseModel):
     added_edges: list[GraphEdge] = Field(default_factory=list)
     removed_node_ids: list[str] = Field(default_factory=list)
     removed_edge_ids: list[str] = Field(default_factory=list)
+
+
+class GraphDiff(BaseModel):
+    added_node_ids: list[str] = Field(default_factory=list)
+    added_edge_ids: list[str] = Field(default_factory=list)
+    removed_node_ids: list[str] = Field(default_factory=list)
+    removed_edge_ids: list[str] = Field(default_factory=list)
+    added_node_types: dict[str, int] = Field(default_factory=dict)
+    added_edge_types: dict[str, int] = Field(default_factory=dict)
+    removed_node_types: dict[str, int] = Field(default_factory=dict)
+    removed_edge_types: dict[str, int] = Field(default_factory=dict)
 
 
 class LocalGraphWorkspaceStore:
@@ -135,6 +146,9 @@ class LocalGraphWorkspaceStore:
         self._write_workspace(workspace)
         return commit
 
+    def preview_delta(self, delta: GraphDelta) -> GraphDocument:
+        return apply_delta(self.load_effective_graph(), delta)
+
     def read_commit(self, commit_id: str) -> tuple[GraphCommit, GraphDelta]:
         commit_dir = self._commit_dir(commit_id)
         commit = GraphCommit.model_validate_json(
@@ -174,36 +188,10 @@ class LocalGraphWorkspaceStore:
     def load_effective_graph(self) -> GraphDocument:
         workspace = self.read_workspace()
         graph = read_graph_jsonl(workspace.base_graph_path)
-        nodes = {node.node_id: node for node in graph.nodes}
-        edges = {edge.edge_id: edge for edge in graph.edges}
-        removed_node_ids: set[str] = set()
-        removed_edge_ids: set[str] = set()
-
         for commit in self.commit_chain():
             _, delta = self.read_commit(commit.commit_id)
-            removed_node_ids.update(delta.removed_node_ids)
-            removed_edge_ids.update(delta.removed_edge_ids)
-
-            for node in delta.added_nodes:
-                if node.node_id not in removed_node_ids:
-                    nodes[node.node_id] = node
-            for edge in delta.added_edges:
-                if edge.edge_id not in removed_edge_ids:
-                    edges[edge.edge_id] = edge
-
-        for node_id in removed_node_ids:
-            nodes.pop(node_id, None)
-        filtered_edges = {
-            edge_id: edge
-            for edge_id, edge in edges.items()
-            if edge_id not in removed_edge_ids
-            and edge.source_id in nodes
-            and edge.target_id in nodes
-        }
-        return GraphDocument(
-            nodes=sorted(nodes.values(), key=lambda node: node.node_id),
-            edges=sorted(filtered_edges.values(), key=lambda edge: edge.edge_id),
-        )
+            graph = apply_delta(graph, delta)
+        return graph
 
     def _write_workspace(self, workspace: GraphWorkspace) -> None:
         (self.root / "workspace.json").write_text(
@@ -222,6 +210,64 @@ def commit_id_for(
     created_at: str,
 ) -> str:
     return "gc_" + stable_id(workspace_id, parent_commit_id or "root", message, created_at)
+
+
+def apply_delta(graph: GraphDocument, delta: GraphDelta) -> GraphDocument:
+    nodes = {node.node_id: node for node in graph.nodes}
+    edges = {edge.edge_id: edge for edge in graph.edges}
+
+    for node_id in delta.removed_node_ids:
+        nodes.pop(node_id, None)
+    for edge_id in delta.removed_edge_ids:
+        edges.pop(edge_id, None)
+
+    for node in delta.added_nodes:
+        if node.node_id not in delta.removed_node_ids:
+            nodes[node.node_id] = node
+    for edge in delta.added_edges:
+        if edge.edge_id not in delta.removed_edge_ids:
+            edges[edge.edge_id] = edge
+
+    filtered_edges = {
+        edge_id: edge
+        for edge_id, edge in edges.items()
+        if edge.source_id in nodes and edge.target_id in nodes
+    }
+    return GraphDocument(
+        nodes=sorted(nodes.values(), key=lambda node: node.node_id),
+        edges=sorted(filtered_edges.values(), key=lambda edge: edge.edge_id),
+    )
+
+
+def diff_graphs(base: GraphDocument, target: GraphDocument) -> GraphDiff:
+    base_nodes = {node.node_id: node for node in base.nodes}
+    target_nodes = {node.node_id: node for node in target.nodes}
+    base_edges = {edge.edge_id: edge for edge in base.edges}
+    target_edges = {edge.edge_id: edge for edge in target.edges}
+
+    added_node_ids = sorted(set(target_nodes) - set(base_nodes))
+    removed_node_ids = sorted(set(base_nodes) - set(target_nodes))
+    added_edge_ids = sorted(set(target_edges) - set(base_edges))
+    removed_edge_ids = sorted(set(base_edges) - set(target_edges))
+
+    return GraphDiff(
+        added_node_ids=added_node_ids,
+        added_edge_ids=added_edge_ids,
+        removed_node_ids=removed_node_ids,
+        removed_edge_ids=removed_edge_ids,
+        added_node_types=_node_type_counts(target_nodes, added_node_ids),
+        added_edge_types=_edge_type_counts(target_edges, added_edge_ids),
+        removed_node_types=_node_type_counts(base_nodes, removed_node_ids),
+        removed_edge_types=_edge_type_counts(base_edges, removed_edge_ids),
+    )
+
+
+def _node_type_counts(nodes: dict[str, GraphNode], node_ids: list[str]) -> dict[str, int]:
+    return dict(Counter(nodes[node_id].node_type.value for node_id in node_ids))
+
+
+def _edge_type_counts(edges: dict[str, GraphEdge], edge_ids: list[str]) -> dict[str, int]:
+    return dict(Counter(edges[edge_id].edge_type.value for edge_id in edge_ids))
 
 
 def _ensure_graph_files_exist(path: Path) -> None:

@@ -439,3 +439,17 @@
 - Added tests for fork isolation, base graph immutability, effective graph loading and
   tombstone behavior. P2 will build on this by writing paper/answer deltas into a
   selected workspace.
+
+## 2026-07-11: Graph Workspace Delta and Diff P2
+
+- Added `GraphDiff`, `apply_delta()` and `diff_graphs()` to compare base graphs with
+  workspace effective graphs.
+- Added `LocalGraphWorkspaceStore.preview_delta()` so CLI tools can validate the
+  resulting effective graph before writing a new workspace commit.
+- Added `scripts/commit_graph_delta.py` for committing JSONL node/edge additions and
+  tombstone ID lists into a workspace.
+- Added `scripts/diff_graph.py` for reporting added/removed nodes and edges plus type
+  counters between a base graph and a workspace effective graph.
+- Added tests for delta commits, base graph immutability, diff summaries and invalid
+  delta detection. This completes the file-backed branch mechanics needed before
+  workspace-aware paper/answer ingestion.
