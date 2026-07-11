@@ -303,6 +303,18 @@ Deliverables:
 - `scripts/inspect_workspace.py`
 - tests for fork isolation and effective graph validation.
 
+Current P1 implementation:
+
+- `GraphWorkspace`, `GraphCommit` and `GraphDelta` are file-backed Pydantic models.
+- `LocalGraphWorkspaceStore.create_fork()` creates a workspace with a base graph pointer
+  and an empty root commit.
+- `LocalGraphWorkspaceStore.load_effective_graph()` applies workspace commits over the
+  base graph and hides tombstoned nodes/edges.
+- `scripts/fork_graph.py` creates local workspace forks.
+- `scripts/inspect_workspace.py` validates the workspace effective graph.
+- Tests cover fork isolation, base graph immutability, effective graph loading and
+  tombstone behavior.
+
 ### P2: Delta-aware graph writing
 
 Make paper ingestion and answer saving write deltas into a selected workspace instead

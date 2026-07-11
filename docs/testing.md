@@ -106,3 +106,24 @@ graph validation entry point remains:
 ```bash
 python scripts/inspect_graph.py --graph artifacts/graph --show-errors
 ```
+
+The P1 workspace commands are now available:
+
+```bash
+python scripts/fork_graph.py \
+  --base artifacts/graph \
+  --workspace-id ws_wxd_demo \
+  --owner wxd \
+  --output artifacts/graph_workspaces/ws_wxd_demo
+
+python scripts/inspect_workspace.py \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --show-errors
+```
+
+Expected validation properties:
+
+- fork creation does not rewrite `artifacts/graph`;
+- the initial effective graph has the same visible nodes/edges as the base graph;
+- workspace commits form a parent chain from root to head;
+- tombstoned nodes are hidden together with their incident edges.

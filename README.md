@@ -303,6 +303,28 @@ evidence graphs.
 See `docs/graph-workspaces.md` for the implementation plan, validation invariants,
 API sketch and the optional Neo4j upgrade path.
 
+Create a local workspace fork:
+
+```bash
+python scripts/fork_graph.py \
+  --base artifacts/graph \
+  --workspace-id ws_wxd_demo \
+  --owner wxd \
+  --output artifacts/graph_workspaces/ws_wxd_demo
+```
+
+Inspect its effective graph:
+
+```bash
+python scripts/inspect_workspace.py \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --show-errors
+```
+
+The P1 workspace implementation stores a base graph pointer plus immutable workspace commits.
+The effective graph is loaded as `base graph + workspace deltas - tombstones`; base JSONL files
+are not rewritten by fork operations.
+
 ## Product service plan
 
 The product-facing design separates lower-level modules from user-facing services.

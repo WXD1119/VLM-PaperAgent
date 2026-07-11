@@ -25,7 +25,10 @@ from paper_agent.graph import (
     GraphNode,
     GraphQuery,
     GraphValidator,
+    GraphDelta,
+    LocalGraphWorkspaceStore,
     NodeType,
+    write_graph_jsonl,
 )
 
 
@@ -122,7 +125,10 @@ def test_graph_builder_links_claims_to_existing_chunks():
     assert any(node.node_type.value == "Section" for node in graph.nodes)
     assert any(node.node_type.value == "Chunk" for node in graph.nodes)
     assert any(node.node_type.value == "Claim" for node in graph.nodes)
-    assert any(node.node_type == NodeType.CONCEPT and node.label == "Q-Former" for node in graph.nodes)
+    assert any(
+        node.node_type == NodeType.CONCEPT and node.label == "Q-Former"
+        for node in graph.nodes
+    )
     assert any(edge.edge_type == EdgeType.SUPPORTED_BY for edge in graph.edges)
     assert any(edge.edge_type == EdgeType.MENTIONS for edge in graph.edges)
 
@@ -228,3 +234,65 @@ def test_graph_query_returns_candidates_for_ambiguous_concept_keyword():
         "sequence alignment",
         "vision-language alignment",
     ]
+
+
+def test_graph_workspace_fork_loads_base_graph_without_rewriting_it(tmp_path):
+    builder = GraphBuilder()
+    builder.add_papers([sample_paper()])
+    builder.add_chunks([sample_chunks()])
+    builder.add_answers([sample_answer()])
+    base_graph = builder.build()
+    base_dir = tmp_path / "base_graph"
+    write_graph_jsonl(base_graph, base_dir)
+    base_nodes_before = (base_dir / "nodes.jsonl").read_text(encoding="utf-8")
+
+    workspace_dir = tmp_path / "workspace"
+    store = LocalGraphWorkspaceStore(workspace_dir)
+    workspace = store.create_fork(
+        base_graph_path=base_dir,
+        workspace_id="ws-test",
+        owner_id="wxd",
+        name="WXD Test Workspace",
+    )
+    effective_graph = store.load_effective_graph()
+    report = GraphValidator().validate(effective_graph)
+
+    assert workspace.workspace_id == "ws-test"
+    assert workspace.head_commit_id is not None
+    assert (workspace_dir / "workspace.json").exists()
+    assert len(store.commit_chain()) == 1
+    assert report.valid
+    assert len(effective_graph.nodes) == len(base_graph.nodes)
+    assert len(effective_graph.edges) == len(base_graph.edges)
+    assert (base_dir / "nodes.jsonl").read_text(encoding="utf-8") == base_nodes_before
+
+
+def test_graph_workspace_delta_tombstone_hides_node_and_incident_edges(tmp_path):
+    builder = GraphBuilder()
+    builder.add_papers([sample_paper()])
+    builder.add_chunks([sample_chunks()])
+    builder.add_answers([sample_answer()])
+    base_graph = builder.build()
+    base_dir = tmp_path / "base_graph"
+    write_graph_jsonl(base_graph, base_dir)
+    chunk = next(node for node in base_graph.nodes if node.node_type == NodeType.CHUNK)
+
+    store = LocalGraphWorkspaceStore(tmp_path / "workspace")
+    store.create_fork(
+        base_graph_path=base_dir,
+        workspace_id="ws-test",
+        owner_id="wxd",
+    )
+    store.commit_delta(
+        GraphDelta(removed_node_ids=[chunk.node_id]),
+        author_id="wxd",
+        message="hide chunk",
+    )
+    effective_graph = store.load_effective_graph()
+    effective_node_ids = {node.node_id for node in effective_graph.nodes}
+
+    assert chunk.node_id not in effective_node_ids
+    assert all(
+        edge.source_id != chunk.node_id and edge.target_id != chunk.node_id
+        for edge in effective_graph.edges
+    )

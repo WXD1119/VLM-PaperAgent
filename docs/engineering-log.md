@@ -425,3 +425,17 @@
   panel: related papers, sections, claims, evidence chunks and related concepts.
 - Extended graph validation so `MENTIONS` must point to `Concept` nodes and originate
   from `Chunk` or `Claim` nodes.
+
+## 2026-07-11: Graph Workspace Fork P1
+
+- Added `paper_agent.graph.workspace` with `GraphWorkspace`, `GraphCommit`,
+  `GraphDelta` and `LocalGraphWorkspaceStore`.
+- Implemented file-backed local workspace forks. A fork stores a pointer to the base
+  graph and an empty root commit instead of copying or rewriting the base graph.
+- Implemented effective graph loading as `base graph + workspace deltas - tombstones`.
+  Tombstoned nodes also hide their incident edges in the effective graph.
+- Added `scripts/fork_graph.py` and `scripts/inspect_workspace.py` for local CLI
+  validation.
+- Added tests for fork isolation, base graph immutability, effective graph loading and
+  tombstone behavior. P2 will build on this by writing paper/answer deltas into a
+  selected workspace.
