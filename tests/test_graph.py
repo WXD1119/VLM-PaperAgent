@@ -32,6 +32,7 @@ from paper_agent.graph import (
     build_paper_fragment,
     delta_from_fragment,
     diff_graphs,
+    promote_answer_to_workspace,
     write_graph_jsonl,
 )
 
@@ -477,6 +478,65 @@ def test_delta_from_answer_fragment_allows_distinct_answers_for_same_query(tmp_p
 
     assert len(added_answer_nodes) == 1
     assert added_answer_nodes[0].properties["answer"] == "Q-Former uses trainable query tokens."
+
+
+def test_promote_answer_preview_does_not_write_workspace_commit(tmp_path):
+    builder = GraphBuilder()
+    builder.add_papers([sample_paper()])
+    builder.add_chunks([sample_chunks()])
+    base_graph = builder.build()
+    base_dir = tmp_path / "base_graph"
+    write_graph_jsonl(base_graph, base_dir)
+    store = LocalGraphWorkspaceStore(tmp_path / "workspace")
+    store.create_fork(
+        base_graph_path=base_dir,
+        workspace_id="ws-test",
+        owner_id="wxd",
+    )
+    commits_before = store.commit_chain()
+
+    result = promote_answer_to_workspace(
+        sample_answer(),
+        store,
+        author_id="wxd",
+        dry_run=True,
+    )
+    effective_graph = store.load_effective_graph()
+
+    assert result.changed
+    assert result.validation.valid
+    assert result.commit is None
+    assert len(store.commit_chain()) == len(commits_before)
+    assert not any(node.node_type == NodeType.ANSWER for node in effective_graph.nodes)
+
+
+def test_promote_answer_commits_only_after_explicit_promotion(tmp_path):
+    builder = GraphBuilder()
+    builder.add_papers([sample_paper()])
+    builder.add_chunks([sample_chunks()])
+    base_graph = builder.build()
+    base_dir = tmp_path / "base_graph"
+    write_graph_jsonl(base_graph, base_dir)
+    store = LocalGraphWorkspaceStore(tmp_path / "workspace")
+    store.create_fork(
+        base_graph_path=base_dir,
+        workspace_id="ws-test",
+        owner_id="wxd",
+    )
+
+    result = promote_answer_to_workspace(
+        sample_answer(),
+        store,
+        author_id="wxd",
+        message="promote reusable answer",
+    )
+    effective_graph = store.load_effective_graph()
+
+    assert result.changed
+    assert result.commit is not None
+    assert result.commit.message == "promote reusable answer"
+    assert any(node.node_type == NodeType.ANSWER for node in effective_graph.nodes)
+    assert any(node.node_type == NodeType.CLAIM for node in effective_graph.nodes)
 
 
 def test_delta_from_fragment_rejects_conflicting_existing_node():

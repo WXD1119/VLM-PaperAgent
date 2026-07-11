@@ -26,27 +26,40 @@ def load_answer_bundles(root: str | Path) -> list[AnswerBundle]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build a lightweight paper evidence graph")
+    parser = argparse.ArgumentParser(description="Build a lightweight paper knowledge graph")
     parser.add_argument("--papers", default="artifacts/papers")
     parser.add_argument("--chunks", default=None, help="Defaults to --papers")
-    parser.add_argument("--answers", default="artifacts/answers")
+    parser.add_argument(
+        "--answers",
+        default="artifacts/answers",
+        help="Legacy answer bundle input, used only with --include-answers.",
+    )
+    parser.add_argument(
+        "--include-answers",
+        action="store_true",
+        help=(
+            "Legacy traceability mode: include Query/Answer/Claim nodes. "
+            "The default Paper KG excludes user/agent QA records."
+        ),
+    )
     parser.add_argument("--output", default="artifacts/graph")
     parser.add_argument("--allow-empty-answers", action="store_true")
     args = parser.parse_args()
 
     papers = load_papers(args.papers)
     chunks = load_chunk_bundles(args.chunks or args.papers)
-    answers = load_answer_bundles(args.answers)
-    if not answers and not args.allow_empty_answers:
+    answers = load_answer_bundles(args.answers) if args.include_answers else []
+    if args.include_answers and not answers and not args.allow_empty_answers:
         raise FileNotFoundError(
             f"no *.answer.json found below {args.answers}; pass --allow-empty-answers "
-            "to build only paper-section-chunk graph"
+            "or omit --include-answers to build only the paper knowledge graph"
         )
 
     builder = GraphBuilder()
     builder.add_papers(papers)
     builder.add_chunks(chunks)
-    builder.add_answers(answers)
+    if args.include_answers:
+        builder.add_answers(answers)
     graph = builder.build()
 
     report = GraphValidator().validate(graph)

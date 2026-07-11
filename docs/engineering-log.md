@@ -470,3 +470,34 @@
 - Changed Answer node IDs to be content-derived from query, answer text and generator
   model instead of list position. This makes repeated import of the same answer a
   no-op while allowing distinct answers for the same query to coexist in one workspace.
+
+## 2026-07-12: Explicit Answer Promotion Boundary
+
+- Clarified the memory model: ordinary QA turns remain transient session memory or
+  immutable `*.answer.json` artifacts; only user-confirmed, reusable, evidence-grounded
+  answers should become persistent graph workspace commits.
+- Added `paper_agent.graph.promotion.promote_answer_to_workspace()` as the reusable
+  promotion boundary. It builds the answer fragment, diffs it against the workspace
+  effective graph, previews validation and commits only when promotion is explicit.
+- Added `scripts/promote_answer_to_workspace.py` with `--dry-run` so the UI/CLI can show
+  the graph delta before writing to long-term graph memory.
+- Kept `scripts/add_answer_to_workspace.py` as a compatibility wrapper, but new
+  workflows should use promotion terminology.
+- Added tests proving dry-run promotion does not write a workspace commit, while
+  explicit promotion persists `Answer` and `Claim` nodes.
+
+## 2026-07-12: Paper KG / Agent Memory Boundary Correction
+
+- Corrected the architecture boundary: the graph is a Paper Knowledge Graph, not the
+  complete agent memory system. It should contain paper content and evidence structure,
+  not user profile, session state or ordinary generated answers.
+- Changed `scripts/build_graph.py` default behavior to build only paper/chunk/concept
+  graph records. Including saved answer bundles now requires explicit
+  `--include-answers` and is treated as legacy traceability mode.
+- Added `paper_agent.memory` as a lightweight three-layer memory skeleton:
+  `SessionMemoryStore`, `EpisodicMemoryStore`, `UserProfileStore`, answer artifact
+  indexing and `PromotionPolicy`.
+- Added `scripts/list_answers.py`, `scripts/memory_log_event.py` and
+  `scripts/memory_profile.py` as the first memory-facing CLIs.
+- Added `docs/agent-memory.md` and updated README/testing/product/workspace docs to
+  state that Paper KG and Agent Memory are separate systems.

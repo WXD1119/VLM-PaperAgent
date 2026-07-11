@@ -73,11 +73,7 @@ def _compatible_existing_node(existing: GraphNode, candidate: GraphNode) -> bool
     if existing == candidate:
         return True
     if existing.node_type == candidate.node_type == NodeType.CONCEPT:
-        existing_key = existing.properties.get("normalized") or existing.node_id.removeprefix(
-            "concept:"
-        )
-        candidate_key = candidate.properties.get("normalized") or candidate.node_id.removeprefix(
-            "concept:"
-        )
-        return existing_key == candidate_key
+        existing_key = existing.properties.get("normalized")
+        candidate_key = candidate.properties.get("normalized")
+        return bool(existing_key and candidate_key and existing_key == candidate_key)
     return False

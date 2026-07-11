@@ -80,8 +80,8 @@ Graph workspaces are validated through invariants rather than screenshots:
 - node IDs and edge IDs must remain unique after all deltas are applied;
 - every edge endpoint must exist in the effective graph;
 - every `Paper` node must still have at least one `Chunk`;
-- every non-abstained `Claim` must have at least one `SUPPORTED_BY` edge;
-- every `SUPPORTED_BY` edge must point to a `Chunk`;
+- legacy answer-in-graph mode: every non-abstained `Claim` must have at least one
+  `SUPPORTED_BY` edge and every `SUPPORTED_BY` edge must point to a `Chunk`;
 - `diff` between base and fork must report only the fork's added/removed graph records.
 
 Planned smoke tests:
@@ -152,7 +152,7 @@ Expected properties:
 - diff reports added/removed node and edge IDs and their type counters;
 - invalid deltas are rejected before commit unless `--allow-invalid` is explicitly used.
 
-Workspace-aware artifact ingestion smoke tests:
+Workspace-aware paper ingestion and memory smoke tests:
 
 ```bash
 python scripts/add_paper_to_workspace.py \
@@ -161,15 +161,18 @@ python scripts/add_paper_to_workspace.py \
   --chunks artifacts/papers/{paper_id}/chunks.json \
   --author wxd
 
-python scripts/add_answer_to_workspace.py \
-  --workspace artifacts/graph_workspaces/ws_wxd_demo \
-  --answer artifacts/answers/demo.answer.json \
-  --author wxd
+python scripts/list_answers.py \
+  --answers artifacts/answers
+
+python scripts/memory_profile.py \
+  --set default_workspace_id ws_wxd_demo
 ```
 
 Expected properties:
 
-- existing paper/answer artifacts are transformed into graph fragments;
+- existing paper artifacts are transformed into graph fragments;
 - only graph records not already visible in the workspace are committed;
 - conflicting existing node/edge IDs are rejected instead of overwritten;
-- the workspace effective graph is validated before the commit is written.
+- the workspace effective graph is validated before the commit is written;
+- ordinary answer generation remains in answer artifacts and agent memory, outside the
+  paper knowledge graph.

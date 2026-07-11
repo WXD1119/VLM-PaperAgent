@@ -9,6 +9,7 @@ from .fragments import (
 )
 from .jsonl_store import read_graph_jsonl, write_graph_jsonl
 from .model import EdgeType, GraphDocument, GraphEdge, GraphNode, NodeType
+from .promotion import AnswerPromotionResult, promote_answer_to_workspace
 from .query import ConceptNeighborhood, GraphQuery
 from .validation import GraphValidationReport, GraphValidator
 from .workspace import (
@@ -37,10 +38,12 @@ __all__ = [
     "GraphWorkspace",
     "LocalGraphWorkspaceStore",
     "NodeType",
+    "AnswerPromotionResult",
     "build_answer_fragment",
     "build_paper_fragment",
     "build_papers_fragment",
     "delta_from_fragment",
+    "promote_answer_to_workspace",
     "apply_delta",
     "diff_graphs",
     "read_graph_jsonl",

@@ -166,6 +166,10 @@ claim-level evidence IDs; the citation validator rejects IDs that were not suppl
 provider is configurable through an OpenAI-compatible interface, so DeepSeek and GLM can be
 compared without changing agent logic.
 
+Answer generation is transient by default. The CLI writes immutable answer artifacts for
+review and evaluation, but those artifacts do not enter the paper knowledge graph by
+default.
+
 ```bash
 pip install -e '.[retrieval,local-vlm]'
 CUDA_VISIBLE_DEVICES=2,3 python scripts/answer_question.py \
@@ -182,7 +186,8 @@ to a vision model only when caption/OCR evidence is insufficient.
 
 `scripts/ask.py` is the presentation-friendly entry point. It runs hybrid retrieval, optional
 cross-encoder reranking, local answer generation, citation integrity validation, and writes the
-immutable answer bundle for later human or GLM judging.
+immutable answer bundle for later human or GLM judging. It does not automatically write the
+answer into a graph workspace.
 
 ```bash
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
@@ -247,17 +252,21 @@ curl -X POST http://127.0.0.1:8000/ask \
 ## Lightweight evidence graph
 
 The first graph backend is a reproducible JSONL intermediate representation rather than a required
-Neo4j service. It records paper, section, chunk, query, answer, claim and concept nodes plus
-traceability edges such as `HAS_SECTION`, `HAS_CHUNK`, `HAS_CLAIM`, `SUPPORTED_BY` and `MENTIONS`.
+Neo4j service. Its default mode is a paper knowledge graph: it records paper, section, chunk and
+concept nodes plus paper-structure and mention edges such as `HAS_SECTION`, `HAS_CHUNK`,
+`CONTAINS` and `MENTIONS`.
 
-Build a graph from all parsed papers, chunks and saved answer bundles:
+Build a graph from all parsed papers and chunks:
 
 ```bash
 python scripts/build_graph.py \
   --papers artifacts/papers \
-  --answers artifacts/answers \
   --output artifacts/graph
 ```
+
+Legacy traceability demos can still include saved answer bundles with `--include-answers`, but new
+workflows should keep generated answers in artifact memory rather than mixing user/agent QA records
+into the paper graph.
 
 Inspect and validate graph invariants:
 
@@ -284,10 +293,10 @@ python scripts/query_graph.py --graph artifacts/graph --concept "Q-Former"
 ```
 
 Correctness is checked by graph invariants rather than visual inspection: node IDs and edge IDs
-must be unique, every edge endpoint must exist, every paper must link to chunks, every claim must
-link to real evidence chunks, `SUPPORTED_BY` edges must target `Chunk` nodes, and `MENTIONS` edges
-must connect `Chunk` or `Claim` sources to `Concept` targets. The JSONL files can later be imported
-into Neo4j/Cypher without changing the graph-building logic.
+must be unique, every edge endpoint must exist, every paper must link to chunks, and `MENTIONS`
+edges must connect supported paper-content sources to `Concept` targets. Legacy answer-in-graph
+mode additionally validates claim-to-evidence edges. The JSONL files can later be imported into
+Neo4j/Cypher without changing the graph-building logic.
 
 Concept lookup keeps disambiguation explicit. Exact concept IDs are expanded directly; ambiguous
 keywords return candidate concept nodes instead of silently choosing the wrong sense.
@@ -295,8 +304,8 @@ keywords return candidate concept nodes instead of silently choosing the wrong s
 ## Graph workspaces and branching
 
 The next graph milestone is multi-user workspace branching. A user should be able to
-start an empty paper graph or fork an existing graph, then add papers, answers and
-annotations without mutating the original graph. The planned design uses immutable
+start an empty paper graph or fork an existing graph, then add papers without mutating
+the original graph. The planned design uses immutable
 graph commits plus copy-on-write JSONL deltas, similar to a lightweight Git model for
 evidence graphs.
 
@@ -348,7 +357,7 @@ python scripts/diff_graph.py \
 Delta commits are validated before they are written. Use `--allow-invalid` only for debugging
 conflict or tombstone scenarios that intentionally break the effective graph invariants.
 
-Add parsed papers or saved answers directly to a workspace:
+Add parsed papers directly to a workspace:
 
 ```bash
 python scripts/add_paper_to_workspace.py \
@@ -357,14 +366,35 @@ python scripts/add_paper_to_workspace.py \
   --chunks artifacts/papers/{paper_id}/chunks.json \
   --author wxd
 
-python scripts/add_answer_to_workspace.py \
-  --workspace artifacts/graph_workspaces/ws_wxd_demo \
-  --answer artifacts/answers/demo.answer.json \
-  --author wxd
 ```
 
 These commands build graph fragments from normal project artifacts, diff them against the
-workspace effective graph, and commit only new records as workspace deltas.
+workspace effective graph, and commit only new records as workspace deltas. Ordinary
+questions and generated answers stay in agent memory or immutable answer artifacts.
+
+## Agent memory
+
+Agent memory is separate from the paper graph. The current lightweight memory layer has:
+
+- short-term session memory: current task, paper, workspace and last answer path;
+- episodic memory: append-only event history;
+- user profile memory: stable preferences and environment defaults;
+- artifact memory: immutable answer/evaluation files.
+
+Useful commands:
+
+```bash
+python scripts/list_answers.py --answers artifacts/answers
+
+python scripts/memory_profile.py --set default_workspace_id ws_wxd_demo
+
+python scripts/memory_log_event.py \
+  --event-type paper_added \
+  --summary "Added LLaVA.pdf to wxd workspace" \
+  --payload-json '{"paper_id":"paper_dc8bace378a282ea"}'
+```
+
+See `docs/agent-memory.md` for the memory design and its boundary with the paper graph.
 
 ## Product service plan
 

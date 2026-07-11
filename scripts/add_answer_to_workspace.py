@@ -3,15 +3,18 @@ from pathlib import Path
 
 from paper_agent.domain import AnswerBundle
 from paper_agent.graph import (
-    GraphValidator,
     LocalGraphWorkspaceStore,
-    build_answer_fragment,
-    delta_from_fragment,
+    promote_answer_to_workspace,
 )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Add a saved answer bundle to a graph workspace")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Compatibility wrapper: promote a saved answer bundle to long-term graph memory. "
+            "Prefer scripts/promote_answer_to_workspace.py for new workflows."
+        )
+    )
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--answer", required=True, help="Path to *.answer.json")
     parser.add_argument("--author", required=True)
@@ -19,33 +22,35 @@ def main() -> None:
     parser.add_argument("--allow-invalid", action="store_true")
     args = parser.parse_args()
 
-    answer = AnswerBundle.model_validate_json(Path(args.answer).read_text(encoding="utf-8"))
-    fragment = build_answer_fragment(answer)
     store = LocalGraphWorkspaceStore(args.workspace)
-    delta = delta_from_fragment(store.load_effective_graph(), fragment)
+    answer = AnswerBundle.model_validate_json(Path(args.answer).read_text(encoding="utf-8"))
+    print(
+        "warning: add_answer_to_workspace.py is a legacy compatibility wrapper; "
+        "new product flows should keep generated answers in artifact/agent memory."
+    )
+    result = promote_answer_to_workspace(
+        answer,
+        store,
+        author_id=args.author,
+        message=args.message or f"add answer for query: {answer.evidence_pack.query}",
+        allow_invalid=args.allow_invalid,
+    )
 
-    if not delta.added_nodes and not delta.added_edges:
-        print(f"no new graph records for answer query: {answer.evidence_pack.query}")
-        return
-
-    preview = store.preview_delta(delta)
-    report = GraphValidator().validate(preview)
-    if not report.valid and not args.allow_invalid:
-        print("answer delta would make effective graph invalid:")
-        for error in report.errors[:50]:
+    if not result.validation.valid and not args.allow_invalid:
+        print("answer promotion rejected: delta would make effective graph invalid:")
+        for error in result.validation.errors[:50]:
             print(f"- {error}")
         raise SystemExit(1)
 
-    commit = store.commit_delta(
-        delta,
-        author_id=args.author,
-        message=args.message or f"add answer for query: {answer.evidence_pack.query}",
-    )
-    print(f"query: {answer.evidence_pack.query}")
-    print(f"commit_id: {commit.commit_id}")
-    print(f"valid_after_commit: {report.valid}")
-    print(f"added_nodes: {len(delta.added_nodes)}")
-    print(f"added_edges: {len(delta.added_edges)}")
+    if not result.changed:
+        print(f"no new graph records for answer query: {result.query}")
+        return
+
+    print(f"query: {result.query}")
+    print(f"commit_id: {result.commit.commit_id if result.commit else '(dry-run)'}")
+    print(f"valid_after_commit: {result.validation.valid}")
+    print(f"added_nodes: {len(result.delta.added_nodes)}")
+    print(f"added_edges: {len(result.delta.added_edges)}")
 
 
 if __name__ == "__main__":

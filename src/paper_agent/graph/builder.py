@@ -13,7 +13,12 @@ def stable_id(*parts: object, prefix: str = "") -> str:
 
 
 class GraphBuilder:
-    """Build a lightweight evidence graph from parsed papers, chunks and answers."""
+    """Build a lightweight paper knowledge graph from parsed papers and chunks.
+
+    `add_answers()` is kept for legacy traceability demos. New paper knowledge graph
+    builds should keep user/agent QA artifacts in the memory/artifact layer instead of
+    mixing them into the paper graph.
+    """
 
     def __init__(self) -> None:
         self._nodes: dict[str, GraphNode] = {}

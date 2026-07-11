@@ -29,13 +29,16 @@ features.
 | Paper Parser | Converts PDFs into normalized `paper.json` with text, equations, tables, figures and section paths. |
 | Chunker | Converts normalized paper elements into retrievable and citable chunks. |
 | Retrieval Index | Provides BM25, dense retrieval, hybrid RRF and reranking. |
-| Evidence Graph Store | Stores `Paper`, `Section`, `Chunk`, `Query`, `Answer`, `Claim` and later `Concept` nodes plus evidence edges. |
+| Paper Knowledge Graph | Stores paper-only content such as `Paper`, `Section`, `Chunk`, `Concept` and later paper-extracted claims/methods/datasets/metrics. |
+| Agent Memory | Stores session state, episodic event history, user profile preferences and answer/evaluation artifacts outside the paper graph. |
 | Citation Judge | Checks citation integrity and semantic claim-evidence support. |
 | Workspace Store | Stores graph workspace metadata, commits, deltas and fork relationships. |
 | Neo4j Exporter | Later materializes the effective graph into Neo4j for Cypher query and visualization. |
 
-`Evidence Graph Store` is the graph foundation. It can answer structural graph queries,
-but it is not the complete user experience by itself.
+`Paper Knowledge Graph` is the graph foundation. It can answer structural graph queries
+about paper content, but it is not the complete user experience by itself. User profile,
+conversation history and generated answers belong to Agent Memory or artifacts, not the
+paper graph.
 
 ## User-facing Services
 
@@ -190,11 +193,15 @@ Typical actions:
 
 - create a graph workspace from scratch;
 - fork a public/team graph;
-- add private papers, answers and annotations;
+- add private papers;
 - diff the private graph against its base;
 - later export the effective graph to Neo4j.
 
 Output style: workspace list, diff report and validation status.
+
+The boundary is intentional. Ordinary questions, generated answers, user preferences and
+session state remain in Agent Memory or saved artifacts. The paper graph stays focused on
+paper content.
 
 ## GraphRAG Layering
 
@@ -202,7 +209,8 @@ Both Graph-grounded QA and Concept Graph Explorer are GraphRAG features, but the
 GraphRAG differently.
 
 ```text
-Evidence Graph Store = graph index / graph memory
+Paper Knowledge Graph = external paper-content knowledge store
+Agent Memory = conversation/task/user memory outside the graph
 Graph-grounded QA = GraphRAG answer mode
 Concept Graph Explorer = GraphRAG exploration mode
 ```
@@ -216,7 +224,7 @@ relationships before generating an answer or presenting a graph neighborhood.
 2. Add `Concept` nodes and `MENTIONS` edges to the graph builder. Done in the first
    deterministic implementation; mention edges keep context previews and source metadata for
    later disambiguation.
-3. Add keyword graph search over `Concept`, `Claim` and `Chunk`. The first version uses
+3. Add keyword graph search over `Concept` and `Chunk`. The first version uses
    `query_graph.py --concept` and returns candidate concepts when a keyword is ambiguous.
 4. Extend `query_graph.py --concept` into a fuller Concept Graph Explorer panel that prints the structured
    Concept Graph Explorer panel.

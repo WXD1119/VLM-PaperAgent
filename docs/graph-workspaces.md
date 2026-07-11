@@ -7,12 +7,14 @@ mutating the original graph.
 
 ## Motivation
 
-The current graph records papers, sections, chunks, queries, answers, claims and
-claim-to-evidence links in JSONL files. This is enough for a single-user offline demo,
-but a deployed product needs stronger isolation:
+The current graph should be treated as a paper knowledge graph: papers, sections,
+chunks, concepts and paper-content relationships are first-class graph records. Earlier
+single-user traceability demos also allowed query/answer/claim records, but those are
+now considered legacy compatibility rather than the long-term graph direction. A
+deployed product needs stronger isolation:
 
 - a public or team graph should remain stable after it is published;
-- each user should be able to add papers, answers and annotations privately;
+- each user should be able to add papers privately without changing the public graph;
 - users should be able to fork a graph in a Git-like way and experiment safely;
 - graph changes should be auditable, diffable and mergeable later.
 
@@ -72,7 +74,7 @@ Suggested fields:
   "workspace_id": "ws_...",
   "parent_commit_id": "gc_parent",
   "author_id": "user_...",
-  "message": "Add BLIP-2 paper and Q-Former answer bundle",
+  "message": "Add BLIP-2 paper",
   "delta_ref": "commits/gc_...",
   "stats": {
     "added_nodes": 18,
@@ -199,7 +201,8 @@ fork_workspace(base_workspace_id, owner_id, name)
 ### Commit a delta
 
 Appends new graph changes to the current workspace. Typical deltas come from parsing a
-new paper, saving an answer bundle, editing labels or adding manual notes.
+new paper or editing paper-content graph labels. Generated answers and user notes should
+remain in agent memory or artifacts unless a legacy traceability demo explicitly opts in.
 
 ```text
 commit_delta(workspace_id, delta, message)
@@ -216,7 +219,7 @@ query_effective_graph(workspace_id, query)
 ### Diff two workspaces
 
 Compares effective graphs or commit chains to show added/removed papers, chunks,
-answers and claim support edges.
+concepts and paper-content edges.
 
 ```text
 diff_workspaces(left_workspace_id, right_workspace_id)
@@ -243,8 +246,9 @@ Every workspace-level operation must preserve these rules:
 4. Edge IDs are unique in the effective graph.
 5. Every edge source and target exists.
 6. A `Paper` node must link to at least one `Chunk`.
-7. A non-abstained `Claim` must link to at least one supporting `Chunk`.
-8. `SUPPORTED_BY` edges must target `Chunk` nodes.
+7. Legacy answer-in-graph mode: a non-abstained answer `Claim` must link to at least
+   one supporting `Chunk`.
+8. Legacy answer-in-graph mode: `SUPPORTED_BY` edges must target `Chunk` nodes.
 9. Tombstoning a node also hides its incident edges in the effective graph.
 10. A private workspace must not become visible to other users unless explicitly shared.
 
@@ -262,7 +266,6 @@ GET  /workspaces/{workspace_id}
 GET  /workspaces/{workspace_id}/graph
 GET  /workspaces/{workspace_id}/diff?against=...
 POST /workspaces/{workspace_id}/papers
-POST /workspaces/{workspace_id}/answers
 POST /workspaces/{workspace_id}/commit
 ```
 
@@ -289,7 +292,8 @@ graph storage.
 
 ### P0: Current state
 
-Single JSONL graph built from parsed papers and answer bundles.
+Single JSONL graph built from parsed papers and chunks. Answer bundles are stored as
+artifacts and evaluated separately.
 
 ### P1: Workspace metadata and effective graph reader
 
@@ -317,14 +321,14 @@ Current P1 implementation:
 
 ### P2: Delta-aware graph writing
 
-Make paper ingestion and answer saving write deltas into a selected workspace instead
-of rebuilding only one global graph.
+Make paper ingestion write deltas into a selected workspace instead of rebuilding only
+one global graph. Answer saving remains artifact/memory behavior.
 
 Deliverables:
 
 - `scripts/commit_graph_delta.py`
 - `scripts/diff_graph.py`
-- tests for added papers, added answers and tombstone behavior.
+- tests for added papers, legacy answer fragments and tombstone behavior.
 
 Current P2 implementation:
 
@@ -340,18 +344,22 @@ Current P2 implementation:
 - Tests cover added records, base graph immutability, diff summaries and invalid delta
   detection.
 
-Workspace-aware artifact ingestion:
+Workspace-aware paper ingestion:
 
 - `build_paper_fragment()` converts one `paper.json` plus `chunks.json` into a graph
   fragment.
-- `build_answer_fragment()` converts one immutable `*.answer.json` bundle into a graph
-  fragment. It may point to evidence chunks that already exist in the workspace
-  effective graph.
 - `delta_from_fragment()` compares a fragment with the workspace effective graph and
   returns only new graph records. Matching IDs with different payloads are rejected as
   conflicts.
 - `scripts/add_paper_to_workspace.py` adds parsed paper artifacts to a workspace.
-- `scripts/add_answer_to_workspace.py` adds saved answer bundles to a workspace.
+
+Legacy answer-in-graph compatibility:
+
+- `build_answer_fragment()` and `scripts/promote_answer_to_workspace.py` remain available
+  for older traceability demos, but new product flows should keep answer bundles in the
+  artifact/memory layer.
+- ordinary chat turns and exploratory questions stay in session memory or immutable
+  answer artifacts.
 
 ### P3: Workspace-aware API
 
@@ -374,7 +382,7 @@ presence of a heavyweight database.
 
 This design lets the project claim more than "RAG over PDFs":
 
-- evidence graph with claim-level provenance;
+- paper knowledge graph with evidence chunks and concept provenance;
 - Git-like graph workspace branching;
 - immutable deltas and audit trail;
 - multi-user isolation by design;
