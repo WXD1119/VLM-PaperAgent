@@ -2,6 +2,7 @@ import hashlib
 from collections.abc import Iterable
 
 from paper_agent.domain import AnswerBundle, ChunkBundle, Paper, RetrievalChunk
+from paper_agent.graph.concepts import ConceptMention, extract_concepts
 from paper_agent.graph.model import EdgeType, GraphDocument, GraphEdge, GraphNode, NodeType
 
 
@@ -71,6 +72,17 @@ class GraphBuilder:
                     EdgeType.CONTAINS,
                     properties={"paper_id": chunk.paper_id},
                 )
+                self._add_concept_mentions(
+                    source_id=chunk_id,
+                    text=" ".join([*chunk.section_path, chunk.content]),
+                    source_kind="chunk",
+                    extra_properties={
+                        "paper_id": chunk.paper_id,
+                        "chunk_id": chunk.chunk_id,
+                        "section_path": chunk.section_path,
+                        "pages": chunk.pages,
+                    },
+                )
 
     def add_answers(self, bundles: Iterable[AnswerBundle]) -> None:
         for index, bundle in enumerate(bundles, start=1):
@@ -134,6 +146,12 @@ class GraphBuilder:
                             "pages": item.pages,
                         },
                     )
+                self._add_concept_mentions(
+                    source_id=claim_id,
+                    text=claim.text,
+                    source_kind="claim",
+                    extra_properties={"claim_index": claim_index},
+                )
 
     def build(self) -> GraphDocument:
         nodes = sorted(self._nodes.values(), key=lambda item: item.node_id)
@@ -182,6 +200,54 @@ class GraphBuilder:
         if existing and existing != node:
             raise ValueError(f"conflicting graph node: {node.node_id}")
         self._nodes[node.node_id] = node
+
+    def _add_concept_mentions(
+        self,
+        *,
+        source_id: str,
+        text: str,
+        source_kind: str,
+        extra_properties: dict,
+    ) -> None:
+        for mention in extract_concepts(text, source="rule"):
+            self._add_concept_node(mention)
+            self._add_edge(
+                source_id,
+                concept_node_id(mention.normalized),
+                EdgeType.MENTIONS,
+                properties={
+                    "concept": mention.normalized,
+                    "mention": mention.label,
+                    "source_kind": source_kind,
+                    "context_preview": preview(text),
+                    **extra_properties,
+                },
+            )
+
+    def _add_concept_node(self, mention: ConceptMention) -> None:
+        node_id = concept_node_id(mention.normalized)
+        existing = self._nodes.get(node_id)
+        if existing is not None:
+            aliases = set(existing.properties.get("aliases", []))
+            aliases.add(mention.label)
+            existing.properties["aliases"] = sorted(aliases, key=str.lower)
+            return
+        self._add_node(
+            GraphNode(
+                node_id=node_id,
+                node_type=NodeType.CONCEPT,
+                label=mention.label,
+                properties={
+                    "canonical_name": mention.label,
+                    "name": mention.label,
+                    "normalized": mention.normalized,
+                    "aliases": [mention.label],
+                    "disambiguation_key": mention.normalized,
+                    "resolver": "deterministic-v1",
+                    "source": mention.source,
+                },
+            )
+        )
 
     def _add_edge(
         self,
@@ -232,6 +298,10 @@ def answer_node_id(query: str, index: int) -> str:
 
 def claim_node_id(answer_id: str, claim_index: int) -> str:
     return f"claim:{stable_id(answer_id, claim_index)}"
+
+
+def concept_node_id(normalized: str) -> str:
+    return f"concept:{normalized}"
 
 
 def edge_node_id(

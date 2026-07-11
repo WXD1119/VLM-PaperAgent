@@ -11,6 +11,7 @@ class NodeType(StrEnum):
     ANSWER = "Answer"
     CLAIM = "Claim"
     QUERY = "Query"
+    CONCEPT = "Concept"
 
 
 class EdgeType(StrEnum):
@@ -22,6 +23,7 @@ class EdgeType(StrEnum):
     HAS_CLAIM = "HAS_CLAIM"
     SUPPORTED_BY = "SUPPORTED_BY"
     CITES = "CITES"
+    MENTIONS = "MENTIONS"
 
 
 class GraphNode(BaseModel):

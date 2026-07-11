@@ -68,3 +68,41 @@ python scripts/chunk_paper.py \
 - Recall@5：1.0000。
 - MRR：0.8333。
 - 输出：`artifacts/evals/bm25.seed.json`。
+
+## Graph workspace validation
+
+Graph workspaces are validated through invariants rather than screenshots:
+
+- forking a workspace must not rewrite the base workspace files;
+- the effective graph must contain all visible base nodes plus the user's delta nodes;
+- tombstoned nodes and tombstoned edges must be hidden from the effective graph;
+- edges whose endpoints are hidden must also be hidden;
+- node IDs and edge IDs must remain unique after all deltas are applied;
+- every edge endpoint must exist in the effective graph;
+- every `Paper` node must still have at least one `Chunk`;
+- every non-abstained `Claim` must have at least one `SUPPORTED_BY` edge;
+- every `SUPPORTED_BY` edge must point to a `Chunk`;
+- `diff` between base and fork must report only the fork's added/removed graph records.
+
+Planned smoke tests:
+
+```bash
+python scripts/fork_graph.py \
+  --base artifacts/graph \
+  --output artifacts/graph_workspaces/ws_demo
+
+python scripts/inspect_workspace.py \
+  --workspace artifacts/graph_workspaces/ws_demo \
+  --show-errors
+
+python scripts/diff_graph.py \
+  --base artifacts/graph \
+  --workspace artifacts/graph_workspaces/ws_demo
+```
+
+These commands are design targets for the next implementation phase; the current stable
+graph validation entry point remains:
+
+```bash
+python scripts/inspect_graph.py --graph artifacts/graph --show-errors
+```

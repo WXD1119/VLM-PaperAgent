@@ -370,3 +370,58 @@
 - 新增 `GraphQuery` 内存查询辅助类和 `scripts/query_graph.py`，支持列出 Paper、查看单篇论文 Chunk、列出 Claim → Evidence Chunk 支撑链、按关键词检索节点。
 - 查询入口用于验证图谱不只是可生成，也能回答“读过哪些论文”“某篇论文有哪些证据块”“某条 claim 被哪些 chunk 支撑”等审计问题。
 - `tests/test_graph.py` 增加查询覆盖，确保 Paper/Chunk/Claim support/search 四类查询都基于同一份图中间表示。
+
+## 2026-07-10: Graph Workspace Branching Design
+
+- Clarified the product requirement behind graph branching: when the agent becomes a
+  website, a user may either build a private paper graph from scratch or fork an
+  existing graph and continue from it without modifying the original graph.
+- Added `docs/graph-workspaces.md` as the source design document for this larger
+  change. The proposal uses immutable graph commits and copy-on-write JSONL deltas,
+  which gives the current lightweight graph a Git-like branch model before introducing
+  a heavier database.
+- Documented the core entities: `GraphWorkspace`, `GraphCommit` and `GraphDelta`.
+  The effective graph is computed by replaying base commits plus user deltas and then
+  applying tombstones.
+- Recorded correctness invariants for fork isolation, edge endpoint validity,
+  tombstone behavior, claim-to-chunk support and non-mutating base graphs. These
+  invariants will become the test plan for the next implementation phase.
+- Kept the existing `.docx` PRD/FSD/API/data-dictionary files unchanged for now.
+  They are versioned product snapshots; updating them before the workspace design is
+  implemented would create two sources of truth. Once P1/P2 are implemented, create a
+  clean v1.3 document set from the Markdown design instead.
+
+## 2026-07-10: Product Service Layering Clarification
+
+- Corrected the product decomposition after discussion: `Evidence Graph Store` is a
+  lower-level system module, not the user-facing feature formerly described as
+  "function 5".
+- Defined `Graph-grounded QA` as user-facing service 5. It takes a question, expands
+  evidence through the graph, and returns a natural-language answer with claim-level
+  citations.
+- Defined `Concept Graph Explorer` as user-facing service 6. It takes a keyword or
+  concept and returns a structured graph neighborhood: related papers, sections,
+  claims, evidence chunks and related concepts.
+- Added `docs/product-service-plan.md` as the service-level source of truth. This
+  prevents future confusion between graph storage, graph structural queries, GraphRAG
+  answer generation and concept exploration.
+
+## 2026-07-10: Concept Nodes and MENTIONS Edges
+
+- Added `Concept` as a graph node type and `MENTIONS` as an edge type. `Chunk` and
+  `Claim` nodes can now point to concepts, giving keyword search a graph-native entry
+  point instead of relying only on substring search.
+- Added deterministic concept extraction in `paper_agent.graph.concepts`. The first
+  implementation intentionally avoids an LLM dependency and extracts stable technical
+  terms such as acronyms, hyphenated terms and known multi-word phrases.
+- Added disambiguation metadata. Concept nodes store canonical name, aliases and a
+  resolver version; `MENTIONS` edges store the surface mention, source kind, source
+  metadata and `context_preview`, so later LLM/NER-based resolvers can distinguish
+  ambiguous concepts using local context.
+- Added `GraphQuery.concept_candidates()` and `concept_neighborhood()`. Exact concept
+  hits are expanded directly; ambiguous keywords return candidate concepts rather than
+  silently selecting one.
+- Extended `scripts/query_graph.py --concept` to print the first Concept Graph Explorer
+  panel: related papers, sections, claims, evidence chunks and related concepts.
+- Extended graph validation so `MENTIONS` must point to `Concept` nodes and originate
+  from `Chunk` or `Claim` nodes.

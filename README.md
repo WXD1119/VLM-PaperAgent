@@ -247,8 +247,8 @@ curl -X POST http://127.0.0.1:8000/ask \
 ## Lightweight evidence graph
 
 The first graph backend is a reproducible JSONL intermediate representation rather than a required
-Neo4j service. It records paper, section, chunk, query, answer and claim nodes plus traceability
-edges such as `HAS_SECTION`, `HAS_CHUNK`, `HAS_CLAIM` and `SUPPORTED_BY`.
+Neo4j service. It records paper, section, chunk, query, answer, claim and concept nodes plus
+traceability edges such as `HAS_SECTION`, `HAS_CHUNK`, `HAS_CLAIM`, `SUPPORTED_BY` and `MENTIONS`.
 
 Build a graph from all parsed papers, chunks and saved answer bundles:
 
@@ -279,9 +279,37 @@ python scripts/query_graph.py \
 python scripts/query_graph.py --graph artifacts/graph --claim-supports --limit 10
 
 python scripts/query_graph.py --graph artifacts/graph --search "Q-Former" --node-type Claim
+
+python scripts/query_graph.py --graph artifacts/graph --concept "Q-Former"
 ```
 
 Correctness is checked by graph invariants rather than visual inspection: node IDs and edge IDs
 must be unique, every edge endpoint must exist, every paper must link to chunks, every claim must
-link to real evidence chunks, and `SUPPORTED_BY` edges must target `Chunk` nodes. The JSONL files
-can later be imported into Neo4j/Cypher without changing the graph-building logic.
+link to real evidence chunks, `SUPPORTED_BY` edges must target `Chunk` nodes, and `MENTIONS` edges
+must connect `Chunk` or `Claim` sources to `Concept` targets. The JSONL files can later be imported
+into Neo4j/Cypher without changing the graph-building logic.
+
+Concept lookup keeps disambiguation explicit. Exact concept IDs are expanded directly; ambiguous
+keywords return candidate concept nodes instead of silently choosing the wrong sense.
+
+## Graph workspaces and branching
+
+The next graph milestone is multi-user workspace branching. A user should be able to
+start an empty paper graph or fork an existing graph, then add papers, answers and
+annotations without mutating the original graph. The planned design uses immutable
+graph commits plus copy-on-write JSONL deltas, similar to a lightweight Git model for
+evidence graphs.
+
+See `docs/graph-workspaces.md` for the implementation plan, validation invariants,
+API sketch and the optional Neo4j upgrade path.
+
+## Product service plan
+
+The product-facing design separates lower-level modules from user-facing services.
+In particular, `Evidence Graph Store` is the graph foundation, while `Graph-grounded QA`
+and `Concept Graph Explorer` are two different user features built on top of that graph:
+
+- `Graph-grounded QA`: question in, paragraph answer with citations out.
+- `Concept Graph Explorer`: keyword in, structured concept neighborhood out.
+
+See `docs/product-service-plan.md` for the current service map and implementation order.

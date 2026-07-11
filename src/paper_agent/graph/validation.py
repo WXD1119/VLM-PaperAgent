@@ -32,6 +32,7 @@ class GraphValidator:
         paper_ids = {node.node_id for node in graph.nodes if node.node_type == NodeType.PAPER}
         chunk_ids = {node.node_id for node in graph.nodes if node.node_type == NodeType.CHUNK}
         claim_ids = {node.node_id for node in graph.nodes if node.node_type == NodeType.CLAIM}
+        concept_ids = {node.node_id for node in graph.nodes if node.node_type == NodeType.CONCEPT}
         if not paper_ids:
             errors.append("graph must contain at least one Paper node")
         if not chunk_ids:
@@ -55,6 +56,14 @@ class GraphValidator:
         for edge in graph.edges:
             if edge.edge_type == EdgeType.SUPPORTED_BY and edge.target_id not in chunk_ids:
                 errors.append(f"SUPPORTED_BY must target Chunk: {edge.edge_id}")
+            if edge.edge_type == EdgeType.MENTIONS and edge.target_id not in concept_ids:
+                errors.append(f"MENTIONS must target Concept: {edge.edge_id}")
+            if (
+                edge.edge_type == EdgeType.MENTIONS
+                and edge.source_id in node_id_set
+                and edge.source_id not in chunk_ids | claim_ids
+            ):
+                errors.append(f"MENTIONS source must be Chunk or Claim: {edge.edge_id}")
 
         return GraphValidationReport(
             valid=not errors,

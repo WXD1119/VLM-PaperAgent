@@ -3,12 +3,13 @@
 from .builder import GraphBuilder
 from .jsonl_store import read_graph_jsonl, write_graph_jsonl
 from .model import EdgeType, GraphDocument, GraphEdge, GraphNode, NodeType
-from .query import GraphQuery
+from .query import ConceptNeighborhood, GraphQuery
 from .validation import GraphValidationReport, GraphValidator
 
 __all__ = [
     "EdgeType",
     "GraphBuilder",
+    "ConceptNeighborhood",
     "GraphDocument",
     "GraphEdge",
     "GraphNode",
