@@ -340,6 +340,19 @@ Current P2 implementation:
 - Tests cover added records, base graph immutability, diff summaries and invalid delta
   detection.
 
+Workspace-aware artifact ingestion:
+
+- `build_paper_fragment()` converts one `paper.json` plus `chunks.json` into a graph
+  fragment.
+- `build_answer_fragment()` converts one immutable `*.answer.json` bundle into a graph
+  fragment. It may point to evidence chunks that already exist in the workspace
+  effective graph.
+- `delta_from_fragment()` compares a fragment with the workspace effective graph and
+  returns only new graph records. Matching IDs with different payloads are rejected as
+  conflicts.
+- `scripts/add_paper_to_workspace.py` adds parsed paper artifacts to a workspace.
+- `scripts/add_answer_to_workspace.py` adds saved answer bundles to a workspace.
+
 ### P3: Workspace-aware API
 
 Expose workspace IDs through `/ask` and graph endpoints.

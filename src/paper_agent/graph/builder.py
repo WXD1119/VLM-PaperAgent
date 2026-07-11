@@ -85,9 +85,13 @@ class GraphBuilder:
                 )
 
     def add_answers(self, bundles: Iterable[AnswerBundle]) -> None:
-        for index, bundle in enumerate(bundles, start=1):
+        for bundle in bundles:
             query_id = query_node_id(bundle.evidence_pack.query)
-            answer_id = answer_node_id(bundle.evidence_pack.query, index)
+            answer_id = answer_node_id(
+                bundle.evidence_pack.query,
+                bundle.answer.answer,
+                bundle.generator_model,
+            )
             self._add_node(
                 GraphNode(
                     node_id=query_id,
@@ -292,8 +296,8 @@ def query_node_id(query: str) -> str:
     return "query:" + stable_id(query)
 
 
-def answer_node_id(query: str, index: int) -> str:
-    return "answer:" + stable_id(query, index)
+def answer_node_id(query: str, answer: str, generator_model: str) -> str:
+    return "answer:" + stable_id(query, answer, generator_model)
 
 
 def claim_node_id(answer_id: str, claim_index: int) -> str:

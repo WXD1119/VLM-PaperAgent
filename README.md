@@ -348,6 +348,24 @@ python scripts/diff_graph.py \
 Delta commits are validated before they are written. Use `--allow-invalid` only for debugging
 conflict or tombstone scenarios that intentionally break the effective graph invariants.
 
+Add parsed papers or saved answers directly to a workspace:
+
+```bash
+python scripts/add_paper_to_workspace.py \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --paper artifacts/papers/{paper_id}/paper.json \
+  --chunks artifacts/papers/{paper_id}/chunks.json \
+  --author wxd
+
+python scripts/add_answer_to_workspace.py \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --answer artifacts/answers/demo.answer.json \
+  --author wxd
+```
+
+These commands build graph fragments from normal project artifacts, diff them against the
+workspace effective graph, and commit only new records as workspace deltas.
+
 ## Product service plan
 
 The product-facing design separates lower-level modules from user-facing services.

@@ -28,6 +28,9 @@ from paper_agent.graph import (
     GraphDelta,
     LocalGraphWorkspaceStore,
     NodeType,
+    build_answer_fragment,
+    build_paper_fragment,
+    delta_from_fragment,
     diff_graphs,
     write_graph_jsonl,
 )
@@ -99,6 +102,40 @@ def sample_answer() -> AnswerBundle:
             claims=[
                 AnswerClaim(
                     text="Q-Former uses learnable queries.",
+                    evidence_ids=["E1"],
+                )
+            ],
+        ),
+        citation_validation=CitationValidation(
+            valid=True,
+            claim_count=1,
+            cited_claim_count=1,
+        ),
+        generator_model="fake-model",
+    )
+
+
+def alternate_sample_answer() -> AnswerBundle:
+    return AnswerBundle(
+        evidence_pack=EvidencePack(
+            query="How does Q-Former work?",
+            items=[
+                EvidenceItem(
+                    evidence_id="E1",
+                    chunk_id="chunk-1",
+                    paper_id="paper-1",
+                    kind=ChunkKind.TEXT,
+                    pages=[1],
+                    section_path=["Title", "Method"],
+                    content="Q-Former uses learnable queries.",
+                )
+            ],
+        ),
+        answer=GroundedAnswer(
+            answer="Q-Former uses trainable query tokens.",
+            claims=[
+                AnswerClaim(
+                    text="Q-Former uses trainable query tokens.",
                     evidence_ids=["E1"],
                 )
             ],
@@ -379,3 +416,124 @@ def test_graph_workspace_preview_delta_detects_invalid_effective_graph(tmp_path)
 
     assert not report.valid
     assert any("MENTIONS must target Concept" in error for error in report.errors)
+
+
+def test_delta_from_paper_fragment_adds_paper_records_to_workspace(tmp_path):
+    empty_base = GraphDocument(nodes=[], edges=[])
+    base_dir = tmp_path / "base_graph"
+    write_graph_jsonl(empty_base, base_dir)
+    store = LocalGraphWorkspaceStore(tmp_path / "workspace")
+    store.create_fork(
+        base_graph_path=base_dir,
+        workspace_id="ws-test",
+        owner_id="wxd",
+    )
+    fragment = build_paper_fragment(sample_paper(), sample_chunks())
+    delta = delta_from_fragment(store.load_effective_graph(), fragment)
+    store.commit_delta(delta, author_id="wxd", message="add paper")
+    effective_graph = store.load_effective_graph()
+
+    assert any(node.node_type == NodeType.PAPER for node in delta.added_nodes)
+    assert any(node.node_type == NodeType.CHUNK for node in delta.added_nodes)
+    assert any(node.node_type == NodeType.CONCEPT for node in delta.added_nodes)
+    assert GraphValidator().validate(effective_graph).valid
+
+
+def test_delta_from_answer_fragment_adds_answer_records_to_existing_paper_workspace(tmp_path):
+    builder = GraphBuilder()
+    builder.add_papers([sample_paper()])
+    builder.add_chunks([sample_chunks()])
+    base_graph = builder.build()
+    base_dir = tmp_path / "base_graph"
+    write_graph_jsonl(base_graph, base_dir)
+    store = LocalGraphWorkspaceStore(tmp_path / "workspace")
+    store.create_fork(
+        base_graph_path=base_dir,
+        workspace_id="ws-test",
+        owner_id="wxd",
+    )
+    fragment = build_answer_fragment(sample_answer())
+    delta = delta_from_fragment(store.load_effective_graph(), fragment)
+    preview = store.preview_delta(delta)
+    report = GraphValidator().validate(preview)
+
+    assert report.valid
+    assert any(node.node_type == NodeType.QUERY for node in delta.added_nodes)
+    assert any(node.node_type == NodeType.ANSWER for node in delta.added_nodes)
+    assert any(node.node_type == NodeType.CLAIM for node in delta.added_nodes)
+    assert any(edge.edge_type == EdgeType.SUPPORTED_BY for edge in delta.added_edges)
+
+
+def test_delta_from_answer_fragment_allows_distinct_answers_for_same_query(tmp_path):
+    builder = GraphBuilder()
+    builder.add_papers([sample_paper()])
+    builder.add_chunks([sample_chunks()])
+    builder.add_answers([sample_answer()])
+    base_graph = builder.build()
+    fragment = build_answer_fragment(alternate_sample_answer())
+    delta = delta_from_fragment(base_graph, fragment)
+
+    added_answer_nodes = [node for node in delta.added_nodes if node.node_type == NodeType.ANSWER]
+
+    assert len(added_answer_nodes) == 1
+    assert added_answer_nodes[0].properties["answer"] == "Q-Former uses trainable query tokens."
+
+
+def test_delta_from_fragment_rejects_conflicting_existing_node():
+    existing = GraphDocument(
+        nodes=[
+            GraphNode(
+                node_id="concept:conflict",
+                node_type=NodeType.CONCEPT,
+                label="old label",
+            )
+        ],
+        edges=[],
+    )
+    fragment = GraphDocument(
+        nodes=[
+            GraphNode(
+                node_id="concept:conflict",
+                node_type=NodeType.CONCEPT,
+                label="new label",
+            )
+        ],
+        edges=[],
+    )
+
+    with pytest.raises(ValueError, match="conflicting graph node"):
+        delta_from_fragment(existing, fragment)
+
+
+def test_delta_from_fragment_treats_existing_concept_as_compatible():
+    existing = GraphDocument(
+        nodes=[
+            GraphNode(
+                node_id="concept:end-to-end",
+                node_type=NodeType.CONCEPT,
+                label="end-to-end",
+                properties={"normalized": "end-to-end", "aliases": ["end-to-end"]},
+            )
+        ],
+        edges=[],
+    )
+    fragment = GraphDocument(
+        nodes=[
+            GraphNode(
+                node_id="concept:end-to-end",
+                node_type=NodeType.CONCEPT,
+                label="End-to-End",
+                properties={
+                    "normalized": "end-to-end",
+                    "aliases": ["End-to-End"],
+                    "source": "rule",
+                },
+            )
+        ],
+        edges=[],
+    )
+
+    delta = delta_from_fragment(existing, fragment)
+
+    assert delta.added_nodes == []
+    assert delta.added_edges == []

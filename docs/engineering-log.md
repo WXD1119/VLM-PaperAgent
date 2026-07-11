@@ -453,3 +453,20 @@
 - Added tests for delta commits, base graph immutability, diff summaries and invalid
   delta detection. This completes the file-backed branch mechanics needed before
   workspace-aware paper/answer ingestion.
+
+## 2026-07-12: Workspace-aware Paper and Answer Ingestion
+
+- Added graph fragment helpers: `build_paper_fragment()`, `build_answer_fragment()`,
+  `build_papers_fragment()` and `delta_from_fragment()`.
+- `delta_from_fragment()` compares a fragment with the workspace effective graph and
+  returns only new records. Existing IDs with different payloads are treated as
+  conflicts, preventing accidental overwrites of base or workspace graph records.
+- Added `scripts/add_paper_to_workspace.py` to convert `paper.json` + `chunks.json`
+  into a workspace delta commit.
+- Added `scripts/add_answer_to_workspace.py` to convert immutable `*.answer.json`
+  bundles into workspace delta commits that can cite existing chunk nodes.
+- Added tests for adding paper fragments into an empty workspace, adding answer
+  fragments into a paper workspace, and conflict detection.
+- Changed Answer node IDs to be content-derived from query, answer text and generator
+  model instead of list position. This makes repeated import of the same answer a
+  no-op while allowing distinct answers for the same query to coexist in one workspace.

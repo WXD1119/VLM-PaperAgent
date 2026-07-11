@@ -151,3 +151,25 @@ Expected properties:
 - effective graph contains base records plus added delta records;
 - diff reports added/removed node and edge IDs and their type counters;
 - invalid deltas are rejected before commit unless `--allow-invalid` is explicitly used.
+
+Workspace-aware artifact ingestion smoke tests:
+
+```bash
+python scripts/add_paper_to_workspace.py \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --paper artifacts/papers/{paper_id}/paper.json \
+  --chunks artifacts/papers/{paper_id}/chunks.json \
+  --author wxd
+
+python scripts/add_answer_to_workspace.py \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --answer artifacts/answers/demo.answer.json \
+  --author wxd
+```
+
+Expected properties:
+
+- existing paper/answer artifacts are transformed into graph fragments;
+- only graph records not already visible in the workspace are committed;
+- conflicting existing node/edge IDs are rejected instead of overwritten;
+- the workspace effective graph is validated before the commit is written.
