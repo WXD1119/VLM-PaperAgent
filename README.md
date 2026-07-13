@@ -1,22 +1,61 @@
 # VLM-PaperAgent
 
-面向 CV/VLM 论文的证据可追溯精读 Agent。核心目标不是堆叠 Agent 数量，而是让每个回答、主张与审稿疑点都能定位到论文页码、章节、公式或图表。
+VLM-PaperAgent 是一个面向视觉语言模型论文的证据可追溯阅读 Agent。它的核心目标不是堆叠“多 Agent”“企业级架构”这类口号，而是让每个回答、每条 claim、每个实验结论都能追溯到论文中的页码、章节、公式、表格或图注。
 
-## MVP 闭环
+项目当前已经形成一条完整闭环：
 
-`PDF -> 结构化解析 -> 混合检索 -> Claim/Evidence 审稿 -> 带引用报告`
-
-当前仓库提供领域模型、基础设施端口、手写 FSM 调度器、API/UI 入口骨架和测试。Marker/MinerU、Chroma、Redis、Neo4j 等实现按接口逐步接入。
-
-## 快速验证
-
-```powershell
-python -m pytest
+```text
+PDF 解析 -> 结构化 Paper/Chunk -> BM25 + Dense + RRF + Rerank 检索
+-> Evidence Pack -> LLM 回答 -> 引用完整性校验 -> 语义 Judge -> Memory/Graph 记录
 ```
 
-## 转换 MinerU 解析结果
+## 当前亮点
 
-MinerU 建议独立部署；业务环境只读取其 `*_content_list.json`：
+- 证据可追溯回答：答案按 claim 绑定 evidence ID，并校验 evidence ID 是否真实来自检索结果。
+- 混合检索与精排：支持 BM25、BGE-M3 dense retrieval、RRF 融合、BGE reranker。
+- 多证据评测：自建 10 篇 VLM 论文、48 个问题的人工标注 retrieval golden set。
+- 幻觉风险控制：使用独立 judge LLM 对 claim-evidence 支持关系做语义审查。
+- 轻量 Paper KG：保存论文、章节、chunk、concept 关系；用户记忆和生成答案默认不写入论文图谱。
+- 三层 memory 骨架：session / episodic / profile 分离，并用 context guard 处理模糊追问。
+- 工程可复现：实验 registry、自动报告、pytest、Chroma 索引一致性检查。
+
+## 最新检索实验结果
+
+数据集：`evals/retrieval_golden.v2.json`，覆盖 10 篇 VLM 论文、48 个手工标注问题。
+
+| 方法 | Hit@1 | Hit@5 | Recall@1 | Recall@5 | MRR | nDCG@5 |
+|---|---:|---:|---:|---:|---:|---:|
+| BM25 | 0.6250 | 1.0000 | 0.1679 | 0.6144 | 0.7733 | 0.6042 |
+| BGE-M3 dense | 0.7083 | 1.0000 | 0.2030 | 0.6005 | 0.8420 | 0.6377 |
+| BM25 + BGE-M3 RRF | 0.7917 | 1.0000 | 0.2252 | 0.6606 | 0.8889 | 0.6906 |
+| RRF + BGE reranker | 0.7500 | 1.0000 | 0.2099 | 0.6944 | 0.8611 | 0.6943 |
+
+中文结论：
+
+- 所有方案 `Hit@5=1.0`，说明前 5 条结果总能找到至少一个可用证据。
+- `BM25 + BGE-M3 RRF` 的 `Hit@1` 和 `MRR` 最好，适合作为默认在线召回方案。
+- `RRF + BGE reranker` 的 `Recall@5` 和 `nDCG@5` 最好，适合高质量、多证据回答模式。
+- `Recall@1` 偏低不是系统不可用，而是因为一个问题经常对应多个证据 chunk，top-1 很难覆盖完整证据集合。
+
+## 快速开始
+
+推荐在 Linux/远程服务器运行，Python 版本建议 3.11。
+
+```bash
+conda create -n paper-agent python=3.11 -y
+conda activate paper-agent
+pip install -e '.[retrieval,llm,api,local-vlm,dev]'
+```
+
+如果只跑单元测试：
+
+```bash
+python -m pytest -v
+```
+
+## 1. 解析论文
+
+MinerU 建议独立环境部署，业务环境只读取 MinerU 产出的 `*_content_list.json`。
 
 ```bash
 python scripts/parse_paper.py \
@@ -25,99 +64,104 @@ python scripts/parse_paper.py \
   --output artifacts/papers
 ```
 
-输出位于 `artifacts/papers/{paper_id}/paper.json`，其中 MinerU 的 0-based
-`page_idx` 已转换为 1-based `page`，并补充章节路径、父级与相邻元素链接。
-
-生成公式感知的父子切片：
+生成 chunk：
 
 ```bash
 python scripts/chunk_paper.py \
   --paper artifacts/papers/{paper_id}/paper.json
 ```
 
-切片器将公式、表格和图片保留为独立证据块；公式块绑定同章节前后解释，
-普通文本按字符预算合并，并保留页码、章节和原始元素 ID。
+输出结构：
 
-建立内存 BM25 基线并检索全部论文：
-
-```bash
-python scripts/search_bm25.py \
-  --chunks artifacts/papers \
-  --query "flow matching objective" \
-  --top-k 5
+```text
+artifacts/papers/{paper_id}/paper.json
+artifacts/papers/{paper_id}/chunks.json
 ```
 
-可使用 `--paper-id` 限定论文，或使用 `--kind equation` 仅检索公式。结果始终
-返回 `paper_id`、页码、章节和 `chunk_id`，可直接作为后续答案引用证据。
+chunk 会保留：
 
-运行首版检索 Golden Set：
+- `paper_id`
+- `chunk_id`
+- 页码
+- 章节路径
+- 原始 element IDs
+- 文本 / 公式 / 表格 / 图注类型
+
+## 2. 构建 Dense 索引
 
 ```bash
-python scripts/evaluate_bm25.py \
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
+CUDA_VISIBLE_DEVICES=2 \
+python scripts/index_dense.py \
   --chunks artifacts/papers \
-  --golden evals/retrieval_golden.seed.json \
-  --output artifacts/evals/bm25.seed.json
-```
-
-`seed` 文件只有3个经人工核对的开发样例，用于验证评测链路，不能作为简历指标。
-正式对比前需扩展到至少30个问题，并冻结数据集版本。
-
-交互式人工标注首批15题：
-
-```bash
-python scripts/annotate_retrieval.py \
-  --chunks artifacts/papers \
-  --questions evals/retrieval_questions.v1.json \
-  --seed evals/retrieval_golden.seed.json \
-  --output evals/retrieval_golden.v1.json \
-  --annotator wxd
-```
-
-工具逐题展示BM25 Top-10，输入 `1,3-4` 选择相关候选，`s`跳过，`q`安全退出。
-每确认一题立即原子写盘，可以随时中断后继续。BM25只负责候选生成，最终相关性必须由人工确认。
-
-## Dense Retrieval + Chroma
-
-默认模型为 `BAAI/bge-m3`。业务代码显式计算归一化Embedding并传给Chroma，避免使用
-Chroma默认模型。首次建库：
-
-```bash
-CUDA_VISIBLE_DEVICES=2 python scripts/index_dense.py \
-  --chunks artifacts/papers \
-  --db artifacts/chroma \
-  --model artifacts/models/bge-m3 \
-  --offline \
-  --device cuda:0
-```
-
-语义检索：
-
-```bash
-CUDA_VISIBLE_DEVICES=2 python scripts/search_dense.py \
   --db artifacts/chroma \
   --model artifacts/models/bge-m3 \
   --offline \
   --device cuda:0 \
-  --query "How are visual features connected to the language model?"
+  --reset
 ```
 
-用与BM25完全相同的Golden Set评测Dense：
+预期输出：
+
+```text
+indexed: 863
+collection_count: 863
+```
+
+`--reset` 会删除并重建 Chroma collection，避免旧索引残留。
+
+## 3. 检索评测
+
+BM25：
 
 ```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 CUDA_VISIBLE_DEVICES=2 \
+python scripts/evaluate_bm25.py \
+  --chunks artifacts/papers \
+  --golden evals/retrieval_golden.v2.json \
+  --output artifacts/evals/bm25.v2.json
+```
+
+Dense：
+
+```bash
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
+CUDA_VISIBLE_DEVICES=2 \
 python scripts/evaluate_dense.py \
   --db artifacts/chroma \
   --model artifacts/models/bge-m3 \
   --offline \
   --device cuda:0 \
-  --golden evals/retrieval_golden.seed.json \
-  --output artifacts/evals/dense.seed.json
+  --golden evals/retrieval_golden.v2.json \
+  --output artifacts/evals/dense.v2.json
 ```
 
-Hybrid Top-20经过多语言Cross-Encoder精排：
+Hybrid：
 
 ```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 CUDA_VISIBLE_DEVICES=2 \
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
+CUDA_VISIBLE_DEVICES=2 \
+python scripts/evaluate_hybrid.py \
+  --chunks artifacts/papers \
+  --db artifacts/chroma \
+  --model artifacts/models/bge-m3 \
+  --offline \
+  --device cuda:0 \
+  --golden evals/retrieval_golden.v2.json \
+  --candidate-k 20 \
+  --rrf-k 60 \
+  --top-k 5 \
+  --output artifacts/evals/hybrid.v2.json
+```
+
+Reranked：
+
+```bash
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
+CUDA_VISIBLE_DEVICES=2 \
 python scripts/evaluate_reranked.py \
   --chunks artifacts/papers \
   --db artifacts/chroma \
@@ -125,72 +169,27 @@ python scripts/evaluate_reranked.py \
   --reranker-model artifacts/models/bge-reranker-v2-m3 \
   --offline \
   --device cuda:0 \
-  --golden evals/retrieval_golden.v1.json \
+  --golden evals/retrieval_golden.v2.json \
   --candidate-k 20 \
   --top-k 5 \
-  --output artifacts/evals/reranked.v1.json
+  --output artifacts/evals/reranker.v2.json
 ```
 
-## 目录
+## 4. 端到端 Demo
 
-- `src/paper_agent/domain`：稳定的业务数据契约。
-- `src/paper_agent/workflow`：状态、合法转换、重试和调度。
-- `src/paper_agent/ingestion`：PDF 解析、规范化和父子切片。
-- `src/paper_agent/retrieval`：Dense、BM25、RRF 和 Rerank。
-- `src/paper_agent/agents`：Claim、Evidence、Critic、Judge、Reporter 节点。
-- `src/paper_agent/storage`：Chroma、Redis、Neo4j 适配器端口。
-- `src/paper_agent/evaluation`：检索、引用和审稿评测。
-- `src/paper_agent/api`：FastAPI 服务入口。
-- `app`：Streamlit 演示入口。
+`scripts/ask.py` 是面试展示时最推荐的入口。它会执行：
 
-## 工程原则
-
-1. 所有结论必须携带 `evidence_ids`。
-2. Agent 只返回结构化增量，不直接控制任意状态跳转。
-3. 状态转换集中校验，节点执行支持重试和 checkpoint。
-4. 外部存储通过 Protocol 隔离，单元测试不依赖 Docker。
-5. 指标只使用真实 Golden Set 评测结果，不预填宣传数字。
-
-实验结果统一登记在 `evals/experiment_registry.json`，可读汇总位于
-`docs/ablation-results.md`；Seed指标仅验证工具链，不作为简历KPI。
-
-## 环境
-
-source /workspace/guest/wxd/anaconda3/etc/profile.d/conda.sh
-conda activate paper-agent
-cd /workspace/guest/wxd/VLM-PaperAgent
-## Evidence-grounded answer generation
-
-The answer stage uses reranked chunks as a bounded `EvidencePack`. The LLM must return
-claim-level evidence IDs; the citation validator rejects IDs that were not supplied. The default
-provider is configurable through an OpenAI-compatible interface, so DeepSeek and GLM can be
-compared without changing agent logic.
-
-Answer generation is transient by default. The CLI writes immutable answer artifacts for
-review and evaluation, but those artifacts do not enter the paper knowledge graph by
-default.
-
-```bash
-pip install -e '.[retrieval,local-vlm]'
-CUDA_VISIBLE_DEVICES=2,3 python scripts/answer_question.py \
-  --chunks artifacts/papers --offline --device cuda:0 --llm-device cuda:1 \
-  --provider local --model artifacts/models/Qwen3-VL-8B-Instruct \
-  --query 'How does Q-Former connect the frozen image encoder and LLM?'
+```text
+context guard -> hybrid retrieval -> rerank -> answer generation
+-> citation validation -> optional semantic judge -> memory summary
 ```
 
-API keys are read from environment variables and must never be committed. The first MVP sends
-MinerU text, equations, tables, and figure captions to a text LLM. Raw figure pixels will be routed
-to a vision model only when caption/OCR evidence is insufficient.
-
-## One-command demo
-
-`scripts/ask.py` is the presentation-friendly entry point. It runs hybrid retrieval, optional
-cross-encoder reranking, local answer generation, citation integrity validation, and writes the
-immutable answer bundle for later human or GLM judging. It does not automatically write the
-answer into a graph workspace.
+基础版：
 
 ```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
+CUDA_VISIBLE_DEVICES=0,1 \
 python scripts/ask.py \
   --query "How does Q-Former bridge the frozen image encoder and frozen language model?" \
   --chunks artifacts/papers \
@@ -204,28 +203,30 @@ python scripts/ask.py \
   --output artifacts/answers/demo.qformer.answer.json
 ```
 
-Use `--no-rerank` for a faster RRF-only smoke test, `--paper-id` to restrict a query to one paper,
-and `--kind equation|table|figure|text` to inspect modality-specific evidence.
-
-When the local GLM judge service is running, add `--judge-url` to turn the demo into a guarded
-generate-then-verify loop. Unsupported claims are fed back to the answer model for revision; if the
-answer still cannot pass after `--max-answer-attempts`, the script emits a safe abstention instead
-of publishing an unsupported answer.
+如果 GLM judge 服务已经启动，可以打开语义引用 gate：
 
 ```bash
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
+CUDA_VISIBLE_DEVICES=0,1 \
 python scripts/ask.py \
   --query "How does Q-Former bridge the frozen image encoder and frozen language model?" \
+  --chunks artifacts/papers \
+  --db artifacts/chroma \
+  --embedding-model artifacts/models/bge-m3 \
+  --reranker-model artifacts/models/bge-reranker-v2-m3 \
+  --model artifacts/models/Qwen3-VL-8B-Instruct \
   --offline \
   --device cuda:0 \
   --llm-device cuda:1 \
   --judge-url http://127.0.0.1:8765 \
-  --max-answer-attempts 2
+  --max-answer-attempts 2 \
+  --output artifacts/answers/demo.qformer.gated.answer.json
 ```
 
-## FastAPI service
+如果 judge 判定有 unsupported claim，`ask.py` 会把反馈传回 answer agent 重试；多次失败后安全 abstain，而不是输出无证据支持的答案。
 
-The same pipeline can be exposed as a local HTTP service. Runtime configuration is read from
-environment variables so model paths do not need to be hard-coded into requests.
+## 5. API 服务
 
 ```bash
 export PAPER_AGENT_CHUNKS=artifacts/papers
@@ -241,7 +242,7 @@ export PAPER_AGENT_JUDGE_URL=http://127.0.0.1:8765
 uvicorn paper_agent.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-Then ask a question:
+请求：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/ask \
@@ -249,14 +250,9 @@ curl -X POST http://127.0.0.1:8000/ask \
   -d '{"query": "How does Q-Former bridge the frozen image encoder and frozen language model?", "top_k": 5}'
 ```
 
-## Lightweight evidence graph
+## 6. Paper Knowledge Graph
 
-The first graph backend is a reproducible JSONL intermediate representation rather than a required
-Neo4j service. Its default mode is a paper knowledge graph: it records paper, section, chunk and
-concept nodes plus paper-structure and mention edges such as `HAS_SECTION`, `HAS_CHUNK`,
-`CONTAINS` and `MENTIONS`.
-
-Build a graph from all parsed papers and chunks:
+默认图谱只保存论文内容，不保存用户画像、用户偏好或普通聊天。
 
 ```bash
 python scripts/build_graph.py \
@@ -264,145 +260,58 @@ python scripts/build_graph.py \
   --output artifacts/graph
 ```
 
-Legacy traceability demos can still include saved answer bundles with `--include-answers`, but new
-workflows should keep generated answers in artifact memory rather than mixing user/agent QA records
-into the paper graph.
-
-Inspect and validate graph invariants:
+验证：
 
 ```bash
-python scripts/inspect_graph.py --graph artifacts/graph --show-errors
-```
-
-Query the graph:
-
-```bash
-python scripts/query_graph.py --graph artifacts/graph --papers
-
-python scripts/query_graph.py \
+python scripts/inspect_graph.py \
   --graph artifacts/graph \
-  --paper-id paper_6bc5d399d6127a64 \
-  --chunks \
-  --limit 5
-
-python scripts/query_graph.py --graph artifacts/graph --claim-supports --limit 10
-
-python scripts/query_graph.py --graph artifacts/graph --search "Q-Former" --node-type Claim
-
-python scripts/query_graph.py --graph artifacts/graph --concept "Q-Former"
-```
-
-Correctness is checked by graph invariants rather than visual inspection: node IDs and edge IDs
-must be unique, every edge endpoint must exist, every paper must link to chunks, and `MENTIONS`
-edges must connect supported paper-content sources to `Concept` targets. Legacy answer-in-graph
-mode additionally validates claim-to-evidence edges. The JSONL files can later be imported into
-Neo4j/Cypher without changing the graph-building logic.
-
-Concept lookup keeps disambiguation explicit. Exact concept IDs are expanded directly; ambiguous
-keywords return candidate concept nodes instead of silently choosing the wrong sense.
-
-## Graph workspaces and branching
-
-The next graph milestone is multi-user workspace branching. A user should be able to
-start an empty paper graph or fork an existing graph, then add papers without mutating
-the original graph. The planned design uses immutable
-graph commits plus copy-on-write JSONL deltas, similar to a lightweight Git model for
-evidence graphs.
-
-See `docs/graph-workspaces.md` for the implementation plan, validation invariants,
-API sketch and the optional Neo4j upgrade path.
-
-Create a local workspace fork:
-
-```bash
-python scripts/fork_graph.py \
-  --base artifacts/graph \
-  --workspace-id ws_wxd_demo \
-  --owner wxd \
-  --output artifacts/graph_workspaces/ws_wxd_demo
-```
-
-Inspect its effective graph:
-
-```bash
-python scripts/inspect_workspace.py \
-  --workspace artifacts/graph_workspaces/ws_wxd_demo \
   --show-errors
 ```
 
-The P1 workspace implementation stores a base graph pointer plus immutable workspace commits.
-The effective graph is loaded as `base graph + workspace deltas - tombstones`; base JSONL files
-are not rewritten by fork operations.
-
-Commit a graph delta into a workspace:
+查询：
 
 ```bash
-python scripts/commit_graph_delta.py \
-  --workspace artifacts/graph_workspaces/ws_wxd_demo \
-  --nodes artifacts/tmp/new_nodes.jsonl \
-  --edges artifacts/tmp/new_edges.jsonl \
-  --author wxd \
-  --message "add private graph records"
+python scripts/query_graph.py --graph artifacts/graph --papers
+python scripts/query_graph.py --graph artifacts/graph --concept "Q-Former"
+python scripts/query_graph.py --graph artifacts/graph --search "Q-Former" --node-type Claim
 ```
 
-Compare the base graph with the workspace effective graph:
+## 7. Memory 设计
 
-```bash
-python scripts/diff_graph.py \
-  --base artifacts/graph \
-  --workspace artifacts/graph_workspaces/ws_wxd_demo \
-  --show-ids
+Agent memory 和 Paper KG 分离：
+
+- Session memory：当前论文、上一个问题、短期任务状态。
+- Episodic memory：执行过的重要事件，例如生成了某个 answer artifact。
+- Profile memory：用户长期偏好，例如回答语言。
+- Artifact memory：答案 JSON、评测报告等可复现文件。
+- Paper KG：只保存论文结构和论文内容，不保存用户个人信息。
+
+这种设计避免把用户行为、模型回答和论文事实混在同一个知识图谱里。
+
+## 目录结构
+
+```text
+src/paper_agent/domain          领域模型：Paper、Chunk、Answer、Workflow
+src/paper_agent/ingestion       MinerU 输出适配、论文结构化、chunk 构建
+src/paper_agent/retrieval       BM25、Dense、RRF、Reranker
+src/paper_agent/agents          AnswerAgent、CitationValidator、SemanticJudge
+src/paper_agent/evaluation      检索、引用、上下文守卫、答案质量评测
+src/paper_agent/graph           轻量 Paper KG 和 workspace 分支
+src/paper_agent/memory          session / episodic / profile memory
+src/paper_agent/api             FastAPI 服务
+scripts                         CLI 工具和实验脚本
+evals                           golden set、实验 registry、benchmark manifest
+docs                            设计文档、实验记录、项目说明
 ```
 
-Delta commits are validated before they are written. Use `--allow-invalid` only for debugging
-conflict or tombstone scenarios that intentionally break the effective graph invariants.
+## 重要文档
 
-Add parsed papers directly to a workspace:
+- `docs/vlm-benchmark-v2.md`：VLM benchmark v2 数据集和检索结果。
+- `docs/answer-quality-evaluation.md`：答案质量与 hallucination 风险评估。
+- `docs/agent-memory.md`：Agent memory 设计。
+- `docs/graph-workspaces.md`：图谱 workspace / 分支机制。
+- `artifacts/reports/experiment_report.md`：自动生成的阶段性实验报告。
 
-```bash
-python scripts/add_paper_to_workspace.py \
-  --workspace artifacts/graph_workspaces/ws_wxd_demo \
-  --paper artifacts/papers/{paper_id}/paper.json \
-  --chunks artifacts/papers/{paper_id}/chunks.json \
-  --author wxd
+## 简历版一句话
 
-```
-
-These commands build graph fragments from normal project artifacts, diff them against the
-workspace effective graph, and commit only new records as workspace deltas. Ordinary
-questions and generated answers stay in agent memory or immutable answer artifacts.
-
-## Agent memory
-
-Agent memory is separate from the paper graph. The current lightweight memory layer has:
-
-- short-term session memory: current task, paper, workspace and last answer path;
-- episodic memory: append-only event history;
-- user profile memory: stable preferences and environment defaults;
-- artifact memory: immutable answer/evaluation files.
-
-Useful commands:
-
-```bash
-python scripts/list_answers.py --answers artifacts/answers
-
-python scripts/memory_profile.py --set default_workspace_id ws_wxd_demo
-
-python scripts/memory_log_event.py \
-  --event-type paper_added \
-  --summary "Added LLaVA.pdf to wxd workspace" \
-  --payload-json '{"paper_id":"paper_dc8bace378a282ea"}'
-```
-
-See `docs/agent-memory.md` for the memory design and its boundary with the paper graph.
-
-## Product service plan
-
-The product-facing design separates lower-level modules from user-facing services.
-In particular, `Evidence Graph Store` is the graph foundation, while `Graph-grounded QA`
-and `Concept Graph Explorer` are two different user features built on top of that graph:
-
-- `Graph-grounded QA`: question in, paragraph answer with citations out.
-- `Concept Graph Explorer`: keyword in, structured concept neighborhood out.
-
-See `docs/product-service-plan.md` for the current service map and implementation order.
+构建了一个面向 VLM 论文的 evidence-grounded reading agent，支持 MinerU 论文解析、BM25+BGE-M3+RRF+BGE-reranker 混合检索、claim-level citation validation、独立 LLM judge、轻量 Paper KG、memory-aware context guard，并在 10 篇论文 48 个手工标注问题上完成检索消融：Hybrid 达到 Hit@1=0.7917 / MRR=0.8889，Reranker 达到 Recall@5=0.6944 / nDCG@5=0.6943。
