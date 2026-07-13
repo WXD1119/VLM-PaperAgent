@@ -5,8 +5,16 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 from paper_agent.agents import AnswerAgent, CitationValidator, SemanticCitationJudge, build_evidence_pack
-from paper_agent.domain import AnswerBundle, ChunkKind, GroundedAnswer, SemanticCitationReport
+from paper_agent.domain import AnswerBundle, ChunkKind, EvidencePack, GroundedAnswer, SemanticCitationReport
 from paper_agent.llm import OpenAICompatibleClient, RemoteStructuredClient, TransformersStructuredClient
+from paper_agent.memory import (
+    ContextGuard,
+    ContextGuardDecision,
+    MemorySummary,
+    SessionMemoryStore,
+    UserProfileStore,
+    build_memory_summary,
+)
 from paper_agent.retrieval import (
     BM25Index,
     CrossEncoderReranker,
@@ -33,6 +41,7 @@ class AskRequest(BaseModel):
     kind: ChunkKind | None = None
     use_rerank: bool = True
     max_answer_attempts: int = Field(default=2, ge=1, le=5)
+    use_context_guard: bool = True
 
 
 class AskResponse(BaseModel):
@@ -41,6 +50,8 @@ class AskResponse(BaseModel):
     semantic_gate_enabled: bool = False
     semantic_gate_passed: bool | None = None
     attempts: int = 1
+    memory: MemorySummary | None = None
+    context: ContextGuardDecision | None = None
 
 
 class PaperQAService(Protocol):
@@ -71,6 +82,14 @@ class LazyPaperQAService:
         self.offline = os.getenv("PAPER_AGENT_OFFLINE", "1") not in {"0", "false", "False"}
         self.rrf_k = int(os.getenv("PAPER_AGENT_RRF_K", "60"))
         self.judge_url = os.getenv("PAPER_AGENT_JUDGE_URL") or None
+        self.session_memory_path = os.getenv(
+            "PAPER_AGENT_SESSION_MEMORY",
+            "artifacts/memory/session.json",
+        )
+        self.profile_memory_path = os.getenv(
+            "PAPER_AGENT_PROFILE_MEMORY",
+            "artifacts/memory/user_profile.json",
+        )
 
         self._sparse = None
         self._dense = None
@@ -79,11 +98,23 @@ class LazyPaperQAService:
         self._judge = None
 
     def ask(self, request: AskRequest) -> AskResponse:
+        context_decision = None
+        effective_paper_id = request.paper_id
+        if request.use_context_guard:
+            context_decision = ContextGuard().decide(
+                request.query,
+                explicit_paper_id=request.paper_id,
+                session=SessionMemoryStore(self.session_memory_path).load(),
+                profile=UserProfileStore(self.profile_memory_path).load(),
+            )
+            if context_decision.needs_clarification:
+                return self._clarification_response(request, context_decision)
+            effective_paper_id = context_decision.resolved_paper_id
         retriever = self._retriever(request)
         hits = retriever.search(
             request.query,
             request.top_k,
-            paper_id=request.paper_id,
+            paper_id=effective_paper_id,
             kind=request.kind,
         )
         pack = build_evidence_pack(request.query, hits)
@@ -105,6 +136,34 @@ class LazyPaperQAService:
             semantic_gate_enabled=gate_enabled,
             semantic_gate_passed=gate_passed,
             attempts=attempts,
+            memory=build_memory_summary(bundle, semantic_report),
+            context=context_decision,
+        )
+
+    @staticmethod
+    def _clarification_response(
+        request: AskRequest,
+        context_decision: ContextGuardDecision,
+    ) -> AskResponse:
+        safe_answer = GroundedAnswer(
+            answer=context_decision.clarification_question
+            or "I need clarification before searching the paper corpus.",
+            abstained=True,
+            abstention_reason="The query depends on missing conversation context.",
+        )
+        pack = EvidencePack(query=request.query, items=[])
+        validation = CitationValidator().validate(safe_answer, pack)
+        bundle = AnswerBundle(
+            evidence_pack=pack,
+            answer=safe_answer,
+            citation_validation=validation,
+            generator_model="",
+        )
+        return AskResponse(
+            bundle=bundle,
+            attempts=0,
+            memory=build_memory_summary(bundle),
+            context=context_decision,
         )
 
     def _retriever(self, request: AskRequest):
@@ -209,7 +268,26 @@ def create_app(service: PaperQAService | None = None):
     @app.post("/ask", response_model=AskResponse)
     def ask(request: AskRequest) -> AskResponse:
         try:
-            return qa_service.ask(request)
+            response = qa_service.ask(request)
+            if response.memory is None:
+                response = response.model_copy(
+                    update={
+                        "memory": build_memory_summary(
+                            response.bundle,
+                            response.semantic_report,
+                        )
+                    }
+                )
+            if response.context is None:
+                response = response.model_copy(
+                    update={
+                        "context": ContextGuard().decide(
+                            request.query,
+                            explicit_paper_id=request.paper_id,
+                        )
+                    }
+                )
+            return response
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 

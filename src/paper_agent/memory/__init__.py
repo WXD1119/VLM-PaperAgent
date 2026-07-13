@@ -1,22 +1,76 @@
 """Agent memory stores that are separate from the paper knowledge graph."""
 
 from .artifacts import AnswerArtifactSummary, list_answer_artifacts, load_answer_artifact
+from .context import ContextGuard, ContextGuardAction, ContextGuardDecision
 from .episodic import Episode, EpisodicMemoryStore
-from .policy import PromotionDecision, PromotionPolicy, PromotionVerdict
+from .policy import (
+    MemoryAction,
+    MemoryCandidate,
+    MemoryCandidateKind,
+    MemoryDecision,
+    MemoryPolicy,
+    MemorySummary,
+    MemoryTarget,
+    PromotionDecision,
+    PromotionPolicy,
+    PromotionVerdict,
+    build_memory_summary,
+)
 from .profile import UserProfile, UserProfileStore
 from .session import SessionMemoryStore, SessionState
+from .summary import (
+    ConversationSummary,
+    ConversationTurn,
+    HashingTextEmbedder,
+    HeuristicConversationSummarizer,
+    InMemorySummaryVectorStore,
+    SlidingWindowMemory,
+    SlidingWindowResult,
+    SummaryCompressionResult,
+    SummaryCursor,
+    SummaryCursorStore,
+    SummaryMemoryStore,
+    SummarySearchHit,
+    build_summary_vector_store,
+    summarize_new_episodes,
+)
 
 __all__ = [
     "AnswerArtifactSummary",
+    "ContextGuard",
+    "ContextGuardAction",
+    "ContextGuardDecision",
+    "ConversationSummary",
+    "ConversationTurn",
     "Episode",
     "EpisodicMemoryStore",
+    "HashingTextEmbedder",
+    "HeuristicConversationSummarizer",
+    "InMemorySummaryVectorStore",
+    "MemoryAction",
+    "MemoryCandidate",
+    "MemoryCandidateKind",
+    "MemoryDecision",
+    "MemoryPolicy",
+    "MemorySummary",
+    "MemoryTarget",
     "PromotionDecision",
     "PromotionPolicy",
     "PromotionVerdict",
     "SessionMemoryStore",
     "SessionState",
+    "SlidingWindowMemory",
+    "SlidingWindowResult",
+    "SummaryCompressionResult",
+    "SummaryCursor",
+    "SummaryCursorStore",
+    "SummaryMemoryStore",
+    "SummarySearchHit",
     "UserProfile",
     "UserProfileStore",
+    "build_memory_summary",
+    "build_summary_vector_store",
+    "summarize_new_episodes",
     "list_answer_artifacts",
     "load_answer_artifact",
 ]

@@ -6,6 +6,7 @@ from paper_agent.evaluation.annotation import (
     parse_selection,
 )
 from paper_agent.evaluation.golden import RetrievalCase
+from scripts.annotate_retrieval import resolve_paper_id
 
 
 def test_parse_selection_supports_lists_and_ranges() -> None:
@@ -30,3 +31,23 @@ def test_query_id_is_stable_and_duplicate_cases_are_rejected() -> None:
     append_case_unique(cases, case)
     with pytest.raises(ValueError, match="duplicate"):
         append_case_unique(cases, case)
+
+
+def test_resolve_paper_id_from_paper_key_map() -> None:
+    paper_id, label = resolve_paper_id(
+        {"paper_key": "clip"},
+        {"clip": {"paper_id": "paper_clip", "short_name": "CLIP"}},
+    )
+
+    assert paper_id == "paper_clip"
+    assert label == "CLIP"
+
+
+def test_resolve_paper_id_prefers_explicit_paper_id() -> None:
+    paper_id, label = resolve_paper_id(
+        {"paper_id": "paper_explicit", "paper_key": "clip"},
+        {"clip": {"paper_id": "paper_clip", "short_name": "CLIP"}},
+    )
+
+    assert paper_id == "paper_explicit"
+    assert label == "clip"

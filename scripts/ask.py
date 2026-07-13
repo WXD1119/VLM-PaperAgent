@@ -5,6 +5,15 @@ from pathlib import Path
 from paper_agent.agents import AnswerAgent, CitationValidator, SemanticCitationJudge, build_evidence_pack
 from paper_agent.domain import AnswerBundle, ChunkKind, GroundedAnswer, SemanticCitationReport
 from paper_agent.llm import OpenAICompatibleClient, RemoteStructuredClient, TransformersStructuredClient
+from paper_agent.memory import (
+    ContextGuard,
+    ContextGuardAction,
+    EpisodicMemoryStore,
+    PromotionPolicy,
+    SessionMemoryStore,
+    UserProfileStore,
+    build_memory_summary,
+)
 from paper_agent.retrieval import (
     BM25Index,
     CrossEncoderReranker,
@@ -82,6 +91,36 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=700,
         help="Max evidence content chars to print.",
+    )
+    parser.add_argument(
+        "--session-memory",
+        default="artifacts/memory/session.json",
+        help="Path for short-term session memory updated after a successful answer run.",
+    )
+    parser.add_argument(
+        "--profile-memory",
+        default="artifacts/memory/user_profile.json",
+        help="Path for long-term user profile memory used by the context guard.",
+    )
+    parser.add_argument(
+        "--no-context-guard",
+        action="store_true",
+        help="Disable memory-based ambiguity checks and paper context constraints.",
+    )
+    parser.add_argument(
+        "--log-episode",
+        action="store_true",
+        help="Append an answer_generated event to episodic memory after a successful run.",
+    )
+    parser.add_argument(
+        "--episode-memory",
+        default="artifacts/memory/episodes.jsonl",
+        help="Path for episodic memory when --log-episode is enabled.",
+    )
+    parser.add_argument(
+        "--show-memory-policy",
+        action="store_true",
+        help="Print developer-facing memory policy details.",
     )
     return parser.parse_args()
 
@@ -256,13 +295,70 @@ def render_bundle(bundle: AnswerBundle, *, content_chars: int = 700) -> str:
     return "\n".join(lines)
 
 
+def render_memory_policy_hint(
+    bundle: AnswerBundle,
+    semantic_report: SemanticCitationReport | None = None,
+) -> str:
+    decision = PromotionPolicy().decide(bundle, semantic_report)
+    lines = [
+        "# Memory policy",
+        "",
+        "artifact_status: kept",
+        "paper_kg_status: not_written",
+        f"promotion_verdict: {decision.verdict.value}",
+        "reasons:",
+    ]
+    lines.extend(f"- {reason}" for reason in decision.reasons)
+    if decision.verdict.value == "ask_user":
+        lines.extend(
+            [
+                "next_step: ask the user before archiving this answer as long-term agent memory",
+            ]
+        )
+    elif decision.verdict.value == "reject":
+        lines.extend(["next_step: keep as artifact only; do not promote"])
+    return "\n".join(lines)
+
+
+def render_memory_summary(
+    bundle: AnswerBundle,
+    semantic_report: SemanticCitationReport | None = None,
+) -> str:
+    summary = build_memory_summary(bundle, semantic_report)
+    return "\n".join(
+        [
+            "# Memory",
+            "",
+            f"Status: {summary.status}.",
+            f"Recommendation: {summary.recommendation}.",
+        ]
+    )
+
+
 def main() -> None:
     args = parse_args()
     if args.max_answer_attempts < 1:
         raise SystemExit("--max-answer-attempts must be at least 1")
+    session_store = SessionMemoryStore(args.session_memory)
+    session_before = session_store.load()
+    context_decision = None
+    effective_paper_id = args.paper_id
+    if not args.no_context_guard:
+        context_decision = ContextGuard().decide(
+            args.query,
+            explicit_paper_id=args.paper_id,
+            session=session_before,
+            profile=UserProfileStore(args.profile_memory).load(),
+        )
+        if context_decision.needs_clarification:
+            raise SystemExit(
+                "Context clarification required: "
+                f"{context_decision.clarification_question}"
+            )
+        effective_paper_id = context_decision.resolved_paper_id
     retriever = build_demo_retriever(args)
     kind = ChunkKind(args.kind) if args.kind else None
-    hits = retriever.search(args.query, args.top_k, paper_id=args.paper_id, kind=kind)
+    hits = retriever.search(args.query, args.top_k, paper_id=effective_paper_id, kind=kind)
     pack = build_evidence_pack(args.query, hits)
     judge = (
         SemanticCitationJudge(RemoteStructuredClient(args.judge_url))
@@ -279,6 +375,38 @@ def main() -> None:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(bundle.model_dump_json(indent=2), encoding="utf-8")
+    session = session_store.update(
+        current_paper_id=effective_paper_id,
+        last_query=args.query,
+        last_answer_path=str(args.output),
+        active_task="answer_generation",
+        metadata={
+            "retriever": "RRF" if args.no_rerank else "RRF+BGE-reranker",
+            "generator_model": args.model,
+            "semantic_gate_enabled": semantic_gate_enabled,
+        },
+    )
+    episode = None
+    if args.log_episode:
+        episode = EpisodicMemoryStore(args.episode_memory).log(
+            "answer_generated",
+            f"Generated answer artifact for query: {args.query}",
+            {
+                "query": args.query,
+                "answer_path": str(args.output),
+                "paper_id": args.paper_id,
+                "effective_paper_id": effective_paper_id,
+                "abstained": bundle.answer.abstained,
+                "claim_count": len(bundle.answer.claims),
+                "evidence_count": len(bundle.evidence_pack.items),
+                "generator_model": args.model,
+                "semantic_gate_enabled": semantic_gate_enabled,
+                "semantic_gate_passed": (
+                    None if semantic_report is None else semantic_report.all_supported
+                ),
+                "attempts": attempts,
+            },
+        )
 
     print(render_bundle(bundle, content_chars=args.content_chars))
     if semantic_gate_enabled:
@@ -296,6 +424,17 @@ def main() -> None:
                     f"- claim={item.claim_index} verdict={item.verdict.value} "
                     f"evidence={item.evidence_ids}: {item.reasoning_summary}"
                 )
+    if context_decision:
+        print("\n# Context guard")
+        print(f"Action: {context_decision.action.value}")
+        if context_decision.resolved_paper_id:
+            print(f"Resolved paper: {context_decision.resolved_paper_id}")
+        for warning in context_decision.warnings:
+            print(f"Warning: {warning}")
+    if args.show_memory_policy:
+        print("\n" + render_memory_policy_hint(bundle, semantic_report))
+    else:
+        print("\n" + render_memory_summary(bundle, semantic_report))
     print("\n# Run")
     print(f"retriever={'RRF' if args.no_rerank else 'RRF+BGE-reranker'}")
     print(f"embedding_model={args.embedding_model}")
@@ -303,6 +442,13 @@ def main() -> None:
         print(f"reranker_model={args.reranker_model}")
     print(f"generator_model={args.model}")
     print(f"answer_bundle={args.output}")
+    print(f"session_memory={args.session_memory}")
+    print(f"profile_memory={args.profile_memory}")
+    if episode:
+        print(f"episode_memory={args.episode_memory}")
+        print(f"memory_event_id={episode.event_id}")
+    if session.current_paper_id:
+        print(f"session_current_paper_id={session.current_paper_id}")
 
 
 if __name__ == "__main__":

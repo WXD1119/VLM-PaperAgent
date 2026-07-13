@@ -121,6 +121,23 @@ class IncompleteThenSingleJudgeClient:
         )
 
 
+class BatchErrorThenSingleJudgeClient:
+    def __init__(self):
+        self.calls = 0
+
+    def generate_structured(self, prompt, response_model):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("judge service request failed: HTTP Error 500")
+        claim_index = 1 if "claim_index=1" in prompt else 2
+        return ClaimSupportAssessment(
+            claim_index=claim_index,
+            verdict=SupportVerdict.SUPPORTED,
+            evidence_ids=["E1"],
+            reasoning_summary="The single-claim fallback judged this claim.",
+        )
+
+
 def test_semantic_judge_assesses_each_claim():
     pack = build_evidence_pack("question", [hit()])
     answer = GroundedAnswer(
@@ -141,6 +158,22 @@ def test_semantic_judge_falls_back_when_batch_is_incomplete():
         ],
     )
     client = IncompleteThenSingleJudgeClient()
+    report = SemanticCitationJudge(client).evaluate(answer, pack)
+    assert [item.claim_index for item in report.assessments] == [1, 2]
+    assert report.all_supported
+    assert client.calls == 3
+
+
+def test_semantic_judge_falls_back_when_batch_raises():
+    pack = build_evidence_pack("question", [hit()])
+    answer = GroundedAnswer(
+        answer="answer",
+        claims=[
+            AnswerClaim(text="It uses learnable queries.", evidence_ids=["E1"]),
+            AnswerClaim(text="It extracts visual features.", evidence_ids=["E1"]),
+        ],
+    )
+    client = BatchErrorThenSingleJudgeClient()
     report = SemanticCitationJudge(client).evaluate(answer, pack)
     assert [item.claim_index for item in report.assessments] == [1, 2]
     assert report.all_supported

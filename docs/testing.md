@@ -162,10 +162,78 @@ python scripts/add_paper_to_workspace.py \
   --author wxd
 
 python scripts/list_answers.py \
-  --answers artifacts/answers
+  --answers artifacts/answers \
+  --contains llava \
+  --abstained false \
+  --latest 5
 
 python scripts/memory_profile.py \
   --set default_workspace_id ws_wxd_demo
+
+python scripts/memory_show.py \
+  --recent 5
+
+python scripts/memory_show.py \
+  --recent 5 \
+  --json
+
+python scripts/memory_decide.py \
+  --kind paper_content \
+  --content "LLaVA architecture evidence" \
+  --json
+
+python scripts/memory_apply.py \
+  --kind project_event \
+  --content "Ran memory policy smoke test" \
+  --metadata-json '{"event_type":"test_event"}'
+
+python scripts/memory_apply.py \
+  --kind casual_chat \
+  --content "thanks"
+
+python scripts/memory_context.py \
+  --query "这个方法怎么连接视觉和语言？"
+
+python scripts/evaluate_context_guard.py \
+  --golden evals/context_guard.seed.json \
+  --output artifacts/evals/context_guard.seed.json
+
+python scripts/demo_tool_orchestrator.py
+
+python scripts/demo_paper_qa_tool_plan.py
+
+python scripts/memory_summarize.py \
+  --episodes artifacts/memory/episodes.jsonl \
+  --summaries artifacts/memory/summaries.jsonl \
+  --cursor artifacts/memory/summary_cursor.json \
+  --window-size 6
+
+python scripts/memory_recall.py \
+  --query "LLaVA context recall" \
+  --summaries artifacts/memory/summaries.jsonl \
+  --top-k 5
+
+python scripts/evaluate_answer_quality.py \
+  --answers artifacts/answers \
+  --judges artifacts/evals \
+  --output artifacts/evals/answer_quality.json
+
+python scripts/batch_judge_answers.py \
+  --answers artifacts/answers \
+  --output-dir artifacts/evals \
+  --judge-url http://127.0.0.1:8765 \
+  --dry-run
+
+python scripts/memory_log_event.py \
+  --event-type policy_gate_test \
+  --summary "Checked policy-gated event logging"
+
+python scripts/memory_profile.py \
+  --set preferred_language zh
+
+python scripts/query_workspace.py \
+  --workspace artifacts/graph_workspaces/ws_wxd_demo \
+  --papers
 ```
 
 Expected properties:
@@ -176,3 +244,33 @@ Expected properties:
 - the workspace effective graph is validated before the commit is written;
 - ordinary answer generation remains in answer artifacts and agent memory, outside the
   paper knowledge graph.
+- workspace queries are run against the effective graph, not only the base graph.
+- successful paper-to-workspace commits append episodic memory events.
+- `memory_show.py --json` exposes the same memory state for API/UI reuse.
+- `memory_decide.py` explains whether a candidate belongs in session, episodic, profile,
+  artifact, Paper KG or nowhere.
+- `memory_apply.py` writes only when `MemoryPolicy` returns a write action; casual chat
+  and Paper KG content are explained but not persisted into agent memory.
+- direct memory write CLIs also pass through the policy gate.
+- `ask.py` prints a user-facing `Memory` section that keeps answers as artifacts, avoids
+  Paper KG writes and explains whether user confirmation is recommended.
+- `ask.py --show-memory-policy` prints developer-facing policy fields such as
+  `promotion_verdict` for debugging.
+- `/ask` returns the same user-facing memory status as structured JSON under `memory`.
+- `memory_context.py` explains whether a query proceeds, is constrained to session
+  `current_paper_id`, or needs user clarification.
+- `/ask` returns the same context guard decision under `context`, and clarification
+  cases return an abstained answer instead of a broad corpus search.
+- `evaluate_context_guard.py` reports context guard accuracy, constraint recall,
+  clarification recall and wrong constraint rate.
+- `demo_tool_orchestrator.py` demonstrates timeout isolation and resource-aware
+  tool-call batching.
+- `demo_paper_qa_tool_plan.py` demonstrates a real pre-answer tool chain with context
+  guard, retrieval and session-memory write.
+- `memory_summarize.py` compresses pending episodic events beyond the sliding window
+  into summary memory and advances `summary_cursor.json`.
+- `memory_recall.py` performs lightweight vector recall over summary memory.
+- `evaluate_answer_quality.py` reports citation pass rate, semantic support rate,
+  unsupported claim rate and fully supported answer rate.
+- `batch_judge_answers.py` lists or runs missing semantic judge reports to improve
+  semantic coverage.

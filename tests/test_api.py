@@ -63,10 +63,15 @@ def test_health_endpoint():
 
 def test_ask_endpoint_returns_answer_bundle():
     client = TestClient(create_app(FakeQAService()))
-    response = client.post("/ask", json={"query": "question"})
+    response = client.post("/ask", json={"query": "What training objective does CLIP use?"})
     assert response.status_code == 200
     body = response.json()
     assert body["bundle"]["answer"]["answer"] == "Answer text"
     assert body["bundle"]["answer"]["claims"][0]["evidence_ids"] == ["E1"]
     assert body["bundle"]["citation_validation"]["valid"] is True
     assert body["semantic_gate_enabled"] is False
+    assert body["memory"]["paper_kg_written"] is False
+    assert body["memory"]["recommendation"] == "ask user before long-term archiving"
+    assert body["memory"]["requires_user_confirmation"] is True
+    assert body["context"]["action"] == "proceed"
+    assert body["context"]["needs_clarification"] is False

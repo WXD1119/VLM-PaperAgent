@@ -99,9 +99,9 @@ class SemanticCitationJudge:
     """Judge whether each claim is entailed by its cited evidence.
 
     The judge first tries one batched LLM call for efficiency. If the model omits,
-    duplicates, or misnumbers claim assessments, it falls back to one call per
-    claim. This keeps evaluation robust with local thinking models whose JSON is
-    valid but not always schema-complete.
+    duplicates, misnumbers claim assessments, or returns malformed structured
+    output, it falls back to one call per claim. This keeps evaluation robust
+    with local thinking models whose JSON is not always schema-complete.
     """
 
     def __init__(self, client: LLMClient) -> None:
@@ -123,9 +123,16 @@ class SemanticCitationJudge:
             for evidence_id in claim.evidence_ids:
                 item = evidence[evidence_id]
                 blocks.append(f"[{evidence_id}] {item.content}")
-        report = self.client.generate_structured("\n\n".join(blocks), SemanticCitationReport)
-        if self._is_complete(report, len(answer.claims)):
-            return self._validate_evidence_ids(report, set(evidence))
+        try:
+            report = self.client.generate_structured("\n\n".join(blocks), SemanticCitationReport)
+            if self._is_complete(report, len(answer.claims)):
+                return self._validate_evidence_ids(report, set(evidence))
+        except Exception:
+            # Batched judging is an optimization, not a hard dependency. Local
+            # thinking models often fail the batched JSON contract while still
+            # succeeding on smaller single-claim prompts, so we degrade
+            # gracefully instead of failing the whole answer.
+            pass
 
         assessments = [
             self._evaluate_single_claim(index, claim, evidence)

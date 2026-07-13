@@ -23,6 +23,31 @@ def load_question_queue(path: Path | None) -> list[dict]:
     return raw
 
 
+def load_paper_id_map(path: Path | None) -> dict[str, dict]:
+    if path is None or not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError("paper id map must be a JSON array")
+    mapping = {}
+    for item in raw:
+        paper_key = item.get("paper_key")
+        paper_id = item.get("paper_id")
+        if paper_key and paper_id:
+            mapping[paper_key] = item
+    return mapping
+
+
+def resolve_paper_id(item: dict, paper_id_map: dict[str, dict]) -> tuple[str | None, str | None]:
+    if item.get("paper_id"):
+        return item["paper_id"], item.get("paper_short_name") or item.get("paper_key")
+    paper_key = item.get("paper_key")
+    if paper_key and paper_key in paper_id_map:
+        row = paper_id_map[paper_key]
+        return row.get("paper_id"), row.get("short_name") or paper_key
+    return None, item.get("paper_short_name") or item.get("paper_key")
+
+
 def show_hits(hits) -> None:
     for rank, hit in enumerate(hits, start=1):
         section = " > ".join(hit.section_path)
@@ -37,14 +62,21 @@ def show_hits(hits) -> None:
             print(f"context={context[:500]}")
 
 
-def annotate_one(index: BM25Index, item: dict, top_k: int, annotator: str):
+def annotate_one(index: BM25Index, item: dict, top_k: int, annotator: str, paper_id_map: dict[str, dict] | None = None):
+    paper_id_map = paper_id_map or {}
     query = item.get("query") or input("\nQuery (q=quit): ").strip()
     if query.lower() == "q":
         return "quit", None
     if not query:
         return "skip", None
 
-    paper_id = item.get("paper_id") or input("paper_id (optional): ").strip() or None
+    resolved_paper_id, paper_label = resolve_paper_id(item, paper_id_map)
+    paper_id = resolved_paper_id
+    if paper_id:
+        label = f" [{paper_label}]" if paper_label else ""
+        print(f"Resolved paper_id{label}: {paper_id}")
+    else:
+        paper_id = input("paper_id (optional): ").strip() or None
     kind_value = item.get("kind") or input(
         "kind [text/equation/table/figure] (optional): "
     ).strip()
@@ -57,7 +89,10 @@ def annotate_one(index: BM25Index, item: dict, top_k: int, annotator: str):
         action = input("> ").strip().lower()
         return ("quit" if action == "q" else "skip"), None
     print(f"\nQuery: {query}")
-    print(f"Category: {category} | paper={paper_id or '*'} | kind={kind_value or '*'}")
+    paper_display = paper_id or "*"
+    if paper_label:
+        paper_display = f"{paper_display} ({paper_label})"
+    print(f"Category: {category} | paper={paper_display} | kind={kind_value or '*'}")
     show_hits(hits)
 
     while True:
@@ -98,6 +133,7 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--questions", type=Path)
     parser.add_argument("--seed", type=Path)
+    parser.add_argument("--paper-id-map", type=Path)
     parser.add_argument("--annotator", default="human")
     parser.add_argument("--top-k", type=int, default=10)
     args = parser.parse_args()
@@ -107,6 +143,7 @@ def main() -> None:
         cases = load_cases(args.seed)
         save_cases_atomic(args.output, cases)
     completed_ids = {case.query_id for case in cases}
+    paper_id_map = load_paper_id_map(args.paper_id_map)
     queue = [
         item
         for item in load_question_queue(args.questions)
@@ -117,8 +154,10 @@ def main() -> None:
 
     index = BM25Index(chunks_from_bundles(load_chunk_bundles(args.chunks)))
     print(f"Loaded {len(index.chunks)} chunks and {len(cases)} existing annotations.")
+    if paper_id_map:
+        print(f"Loaded {len(paper_id_map)} paper_id mappings.")
     for item in queue:
-        action, case = annotate_one(index, item, args.top_k, args.annotator)
+        action, case = annotate_one(index, item, args.top_k, args.annotator, paper_id_map)
         if action == "quit":
             break
         if action == "saved" and case is not None:

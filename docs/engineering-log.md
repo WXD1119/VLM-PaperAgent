@@ -501,3 +501,180 @@
   `scripts/memory_profile.py` as the first memory-facing CLIs.
 - Added `docs/agent-memory.md` and updated README/testing/product/workspace docs to
   state that Paper KG and Agent Memory are separate systems.
+
+## 2026-07-12: Agent Memory M1 CLI Integration
+
+- Started M1 of the memory roadmap: connect the lightweight memory skeleton to everyday
+  CLI workflows without expanding scope into a full database-backed memory service.
+- Added `scripts/query_workspace.py` to query a workspace effective graph directly for
+  papers, chunks, keyword search and concept neighborhoods.
+- Updated `scripts/ask.py` so successful answer runs update short-term session memory
+  with `last_query`, `last_answer_path`, `current_paper_id` and runtime metadata.
+- Extended `scripts/list_answers.py` with `--contains`, `--abstained true|false` and
+  `--latest` filters for practical artifact memory inspection.
+- Updated `scripts/add_paper_to_workspace.py` so successful paper workspace commits
+  append `paper_added_to_workspace` episodic memory events.
+- Added `scripts/memory_show.py` to inspect session memory, user profile memory and
+  recent episodes from one command.
+- Added `scripts/memory_show.py --json` for API/UI reuse and `ask.py --log-episode` for
+  opt-in `answer_generated` episodic logging. This completes the M1 memory workflow
+  integration target; M2 should focus on policy decisions rather than more CLI plumbing.
+
+## 2026-07-12: Agent Memory M2 Policy Routing
+
+- Added general `MemoryPolicy` routing for candidate information. It returns an
+  explainable action and target without writing any data.
+- Added candidate kinds for task state, project events, user preferences, answer
+  artifacts, paper content, casual chat and unknown input.
+- Added decisions for `session`, `episodic`, `profile`, `artifact`, `paper_kg` and
+  `none`, explicitly keeping Paper KG outside the agent memory hierarchy.
+- Added `scripts/memory_decide.py` to inspect routing decisions from the CLI.
+- Added tests for routing task state, project events, explicit/inferred preferences,
+  answer artifacts, paper content and casual chat.
+- Added `scripts/memory_apply.py`, a policy-gated writer that persists only approved
+  `session`, `episodic` or `profile` records. Paper content, casual chat and inferred
+  preferences are explained but not written by default.
+- Updated `scripts/memory_log_event.py` and `scripts/memory_profile.py` to reuse the
+  same policy-gated writer, preventing direct memory writes from bypassing M2 rules.
+- Updated `scripts/ask.py` to print a user-facing `Memory` section by default after
+  answer generation. It keeps answers as artifacts, confirms Paper KG is not written,
+  and explains whether user confirmation is recommended for long-term archiving.
+- Added `scripts/ask.py --show-memory-policy` for developer-facing policy fields such
+  as `promotion_verdict`, keeping ordinary output cleaner for a future website UI.
+- Added a shared `MemorySummary` / `build_memory_summary()` path and exposed it through
+  `/ask` responses as a structured `memory` field, so CLI and API use the same
+  user-facing memory status.
+- Added endpoint-level fallback so `/ask` fills `memory` even when an injected or legacy
+  `PaperQAService` returns an `AskResponse` without memory details.
+
+## 2026-07-12: Agent Memory M3 Context Guard
+
+- Started M3 by adding `ContextGuard`, a deterministic memory-aware guard for ambiguous
+  follow-up questions and multi-turn topic drift.
+- Added `scripts/memory_context.py` to inspect whether a query should proceed, be
+  constrained to the session `current_paper_id`, or ask for clarification.
+- Integrated the guard into `scripts/ask.py` by default, with `--no-context-guard` for
+  ablations and debugging.
+- Added tests for session-paper constraint, missing-context clarification, explicit
+  `paper_id` precedence and avoiding unwanted constraints for clear new questions.
+- Exposed context guard decisions through `/ask` as a structured `context` field.
+- Updated `memory_apply.py` so task-state metadata such as `current_paper_id` and
+  `current_workspace_id` is written to session top-level fields, not only nested
+  metadata.
+
+## 2026-07-13: Agent Memory M3 Context Guard Evaluation
+
+- Added `evals/context_guard.seed.json`, a seed golden set for ambiguous follow-ups,
+  missing-context follow-ups, explicit paper overrides and clear new questions.
+- Added `paper_agent.evaluation.context_guard` with metrics for exact accuracy,
+  constraint recall, clarification recall and wrong constraint rate.
+- Added `scripts/evaluate_context_guard.py` to run the evaluation and write JSON
+  artifacts for experiment tracking.
+- Added tests that validate the seed set scores perfectly and the evaluation script
+  writes machine-readable results.
+
+## 2026-07-13: M4 Tool Orchestration Foundation
+
+- Added `paper_agent.tools.ToolOrchestrator`, a lightweight tool-calling layer separate
+  from the workflow FSM.
+- Added tool registration, structured `ToolCall` / `ToolResult`, per-tool timeout
+  isolation and resource-aware batching.
+- Added conflict scheduling: read/read calls can share a batch, but write/read and
+  write/write calls touching the same resource are serialized.
+- Added `scripts/demo_tool_orchestrator.py` and `docs/tool-orchestration.md` for a
+  no-model demo suitable for interviews.
+- Added tests for happy path execution, ordering, write conflict serialization, timeout
+  isolation, unknown tool handling and tool error isolation.
+
+## 2026-07-13: M4-2 Paper QA Tool Plan
+
+- Added `PaperQAToolPlan`, a real pre-answer tool chain that runs context guard,
+  retrieval, optional graph concept lookup and session-memory update through the tool
+  orchestrator.
+- Kept LLM generation outside this plan so tool orchestration can be tested without GPU
+  or model loading.
+- Added `scripts/demo_paper_qa_tool_plan.py` and tests proving ambiguous follow-ups are
+  constrained before retrieval, missing-context queries avoid tool calls, and clear new
+  questions are not bound to stale session papers.
+
+## 2026-07-13: M5 Episodic Summary Memory
+
+- Added sliding-window memory compression with `ConversationTurn`,
+  `SlidingWindowMemory`, `ConversationSummary` and `SummaryMemoryStore`.
+- Added deterministic `HeuristicConversationSummarizer` to compress overflow turns into
+  summary text, key entities, paper IDs, decisions and unresolved questions.
+- Added dependency-free `HashingTextEmbedder` and `InMemorySummaryVectorStore` for
+  summary recall without reusing the paper chunk vector collection.
+- Added `scripts/memory_summarize.py` and `scripts/memory_recall.py`.
+- Updated `memory_show.py` to include recent summary memory records.
+- Added tests for sliding-window split, summary extraction, summary store/vector recall
+  and CLI summary writing.
+- Added `SummaryCursorStore` and `summary_cursor.json` support so repeated
+  `memory_summarize.py` runs only compress pending events after the last summarized
+  event.
+- Defined the compression trigger: manual command execution plus
+  `pending_events > window_size`.
+- Updated `memory_show.py` to display local time alongside raw UTC timestamps while
+  keeping stored timestamps in UTC.
+- Connected summary memory recall to `PaperQAToolPlan` as a real read tool in the
+  pre-answer tool chain.
+
+## 2026-07-13: M6 Answer Quality and Hallucination Metrics
+
+- Added answer-level quality evaluation over saved `*.answer.json` bundles and optional
+  `*.glm-judge.json` semantic citation reports.
+- Added metrics for citation pass rate, abstention rate, semantic coverage, semantic
+  support rate, unsupported claim rate and fully supported answer rate.
+- Added `scripts/evaluate_answer_quality.py` and tests for unsupported-claim tracking
+  and JSON artifact output.
+- Documented how this dependency-free evaluator relates to optional future RAGAS
+  integration.
+- Added `scripts/batch_judge_answers.py` to dry-run or execute missing semantic judge
+  reports through the already-running local judge service, improving semantic coverage
+  without repeatedly loading GLM.
+- Hardened the remote judge client so `--judge-url` accepts either a service root or
+  `/generate`, and prints the normalized endpoint for debugging.
+- Added fallback from batched semantic judging to per-claim judging when the local GLM
+  returns malformed structured output or the service returns an error.
+- Added malformed-JSON recovery in `scripts/serve_glm_judge.py` for common GLM judge
+  outputs such as unquoted property names in single-claim assessments.
+- Added answer-quality gates for semantic coverage, semantic support, unsupported-claim
+  rate and fully supported answer rate.
+- Latest validated run: 12 answers, 37 claims, citation pass rate 1.0000, semantic
+  coverage 1.0000, semantic support 1.0000, unsupported claim rate 0.0000, fully
+  supported answer rate 0.8333, quality gate PASS.
+
+## 2026-07-13: M7 Experiment Report Generation
+
+- Added `scripts/build_experiment_report.py` to aggregate experiment registry,
+  answer-quality JSON and context-guard JSON into a Markdown report.
+- Added `docs/experiment-report.md` as a clean, resume-facing snapshot of the current
+  retrieval, answer-quality, memory/context and graph-workspace results.
+- Added tests proving the report builder emits retrieval metrics, hallucination-risk
+  metrics and resume-ready summary text.
+
+## 2026-07-13: M8 VLM Benchmark v2 Preparation
+
+- Added `evals/vlm_benchmark_manifest.v2.json` with 10 representative VLM papers and
+  50 candidate question seeds across method, dataset, evaluation, comparison and
+  limitation categories.
+- Downloaded the 10 benchmark PDFs into `data/raw/vlm_benchmark/`.
+- Added `scripts/download_vlm_papers.py`, a resumable arXiv PDF downloader that skips
+  existing files and supports dry runs.
+- Added `scripts/build_vlm_benchmark_questions.py` to flatten manifest question seeds
+  into `evals/retrieval_questions.v2.draft.json`.
+- Added `docs/vlm-benchmark-v2.md` describing the paper set, candidate question queue
+  and required human annotation workflow before using v2 as a golden set.
+- Added tests for manifest integrity, question draft generation and downloader dry-run
+  behavior.
+- Added `scripts/prepare_vlm_benchmark.py` to batch-generate the question draft, print
+  the MinerU command, and convert available MinerU outputs into `paper.json` and
+  `chunks.json`.
+- Added `scripts/inspect_vlm_benchmark.py` to report per-paper readiness for PDF,
+  MinerU output, parsed paper JSON and retrieval chunks.
+- Added `scripts/postprocess_vlm_benchmark.py` to dry-run or execute dense indexing and
+  graph building after the 10-paper benchmark is chunked, and to print the next
+  annotation/evaluation commands.
+- Added `scripts/build_vlm_paper_id_map.py` and `annotate_retrieval.py --paper-id-map`
+  so v2 draft questions with `paper_key` automatically resolve to hash-based
+  `paper_id` values during annotation.

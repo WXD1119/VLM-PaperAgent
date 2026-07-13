@@ -1,7 +1,9 @@
 import json
 import re
+import urllib.error
 import urllib.request
 from typing import Protocol, TypeVar
+from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
@@ -48,7 +50,7 @@ class RemoteStructuredClient:
     """Call the isolated local judge service without adding an HTTP dependency."""
 
     def __init__(self, base_url: str, timeout: float = 300) -> None:
-        self.url = base_url.rstrip("/") + "/generate"
+        self.url = self._normalize_generate_url(base_url)
         self.timeout = timeout
 
     def generate_structured(self, prompt: str, response_model: type[T]) -> T:
@@ -65,11 +67,40 @@ class RemoteStructuredClient:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            hint = ""
+            if exc.code == 404:
+                hint = (
+                    " Check that the GLM judge service is running from "
+                    "scripts/serve_glm_judge.py and that --judge-url points to "
+                    "either http://host:port or http://host:port/generate."
+                )
+            raise RuntimeError(
+                f"judge service request failed at {self.url}: HTTP Error {exc.code}: "
+                f"{exc.reason}.{hint}"
+            ) from exc
         except Exception as exc:
-            raise RuntimeError(f"judge service request failed: {exc}") from exc
+            raise RuntimeError(f"judge service request failed at {self.url}: {exc}") from exc
         if "content" not in body:
             raise ValueError("judge service response is missing content")
         return response_model.model_validate(body["content"])
+
+    @staticmethod
+    def _normalize_generate_url(base_url: str) -> str:
+        """Accept either a service root URL or the concrete /generate endpoint."""
+        stripped = base_url.strip().rstrip("/")
+        if not stripped:
+            raise ValueError("judge service URL must not be empty")
+        parsed = urlparse(stripped)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError(
+                "judge service URL must include scheme and host, e.g. http://127.0.0.1:8765"
+            )
+        if parsed.path.rstrip("/") == "/generate":
+            return stripped
+        if parsed.path in ("", "/"):
+            return stripped + "/generate"
+        return stripped
 
 
 class TransformersStructuredClient:

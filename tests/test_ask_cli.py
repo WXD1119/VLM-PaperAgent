@@ -1,6 +1,12 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+import pydantic
+
+if not hasattr(pydantic, "model_validator"):
+    pytest.skip("ask CLI tests require pydantic v2", allow_module_level=True)
+
 from paper_agent.domain import (
     AnswerBundle,
     AnswerClaim,
@@ -69,6 +75,136 @@ def test_render_bundle_shows_answer_claims_and_evidence():
     assert "1. Q-Former uses learnable queries. [E1]" in rendered
     assert "Status: PASS" in rendered
     assert "[E1] paper-1 | text | pages=[2]" in rendered
+
+
+def test_render_memory_policy_hint_recommends_user_confirmation_for_supported_answer():
+    ask = load_ask_module()
+    bundle = AnswerBundle(
+        evidence_pack=evidence_pack(),
+        answer=GroundedAnswer(
+            answer="Q-Former uses learnable queries.",
+            claims=[
+                AnswerClaim(
+                    text="Q-Former uses learnable queries.",
+                    evidence_ids=["E1"],
+                )
+            ],
+        ),
+        citation_validation=CitationValidation(
+            valid=True,
+            claim_count=1,
+            cited_claim_count=1,
+        ),
+        generator_model="local-model",
+    )
+    report = SemanticCitationReport(
+        assessments=[
+            ClaimSupportAssessment(
+                claim_index=1,
+                verdict=SupportVerdict.SUPPORTED,
+                evidence_ids=["E1"],
+                reasoning_summary="supported",
+            )
+        ]
+    )
+
+    rendered = ask.render_memory_policy_hint(bundle, report)
+
+    assert "# Memory policy" in rendered
+    assert "artifact_status: kept" in rendered
+    assert "paper_kg_status: not_written" in rendered
+    assert "promotion_verdict: ask_user" in rendered
+
+
+def test_render_memory_summary_hides_policy_details_for_supported_answer():
+    ask = load_ask_module()
+    bundle = AnswerBundle(
+        evidence_pack=evidence_pack(),
+        answer=GroundedAnswer(
+            answer="Q-Former uses learnable queries.",
+            claims=[
+                AnswerClaim(
+                    text="Q-Former uses learnable queries.",
+                    evidence_ids=["E1"],
+                )
+            ],
+        ),
+        citation_validation=CitationValidation(
+            valid=True,
+            claim_count=1,
+            cited_claim_count=1,
+        ),
+        generator_model="local-model",
+    )
+    report = SemanticCitationReport(
+        assessments=[
+            ClaimSupportAssessment(
+                claim_index=1,
+                verdict=SupportVerdict.SUPPORTED,
+                evidence_ids=["E1"],
+                reasoning_summary="supported",
+            )
+        ]
+    )
+
+    rendered = ask.render_memory_summary(bundle, report)
+
+    assert "# Memory" in rendered
+    assert "answer saved as artifact" in rendered
+    assert "not written to Paper KG" in rendered
+    assert "ask user before long-term archiving" in rendered
+    assert "promotion_verdict" not in rendered
+    assert "artifact_status" not in rendered
+
+
+def test_render_memory_policy_hint_rejects_abstained_answer():
+    ask = load_ask_module()
+    bundle = AnswerBundle(
+        evidence_pack=evidence_pack(),
+        answer=GroundedAnswer(
+            answer="The evidence is insufficient.",
+            claims=[],
+            abstained=True,
+            abstention_reason="insufficient evidence",
+        ),
+        citation_validation=CitationValidation(
+            valid=True,
+            claim_count=0,
+            cited_claim_count=0,
+        ),
+        generator_model="local-model",
+    )
+
+    rendered = ask.render_memory_policy_hint(bundle)
+
+    assert "promotion_verdict: reject" in rendered
+    assert "answer abstained" in rendered
+    assert "keep as artifact only" in rendered
+
+
+def test_render_memory_summary_keeps_abstained_answer_as_artifact_only():
+    ask = load_ask_module()
+    bundle = AnswerBundle(
+        evidence_pack=evidence_pack(),
+        answer=GroundedAnswer(
+            answer="The evidence is insufficient.",
+            claims=[],
+            abstained=True,
+            abstention_reason="insufficient evidence",
+        ),
+        citation_validation=CitationValidation(
+            valid=True,
+            claim_count=0,
+            cited_claim_count=0,
+        ),
+        generator_model="local-model",
+    )
+
+    rendered = ask.render_memory_summary(bundle)
+
+    assert "# Memory" in rendered
+    assert "keep as artifact only; do not archive" in rendered
+    assert "promotion_verdict" not in rendered
 
 
 class FeedbackAwareAgent:

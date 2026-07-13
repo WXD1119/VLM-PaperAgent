@@ -1,0 +1,56 @@
+[
+  {
+    "case_id": "llava_followup_with_session",
+    "query": "这个方法怎么连接视觉和语言？",
+    "session_current_paper_id": "paper_dc8bace378a282ea",
+    "preferred_language": "zh",
+    "expected_action": "constrain",
+    "expected_resolved_paper_id": "paper_dc8bace378a282ea",
+    "expected_needs_clarification": false,
+    "notes": "Ambiguous Chinese follow-up should reuse current LLaVA paper."
+  },
+  {
+    "case_id": "ambiguous_followup_without_session",
+    "query": "这个方法效果怎么样？",
+    "expected_action": "ask_clarification",
+    "expected_resolved_paper_id": null,
+    "expected_needs_clarification": true,
+    "notes": "Ambiguous follow-up without current paper should not search the whole corpus."
+  },
+  {
+    "case_id": "clear_clip_question_with_old_session",
+    "query": "What training objective does CLIP use to learn image and text representations?",
+    "session_current_paper_id": "paper_dc8bace378a282ea",
+    "expected_action": "proceed",
+    "expected_resolved_paper_id": null,
+    "expected_needs_clarification": false,
+    "notes": "Clear new CLIP question should not be constrained to old LLaVA session."
+  },
+  {
+    "case_id": "explicit_paper_overrides_session",
+    "query": "这个方法怎么连接视觉和语言？",
+    "session_current_paper_id": "paper_6bc5d399d6127a64",
+    "explicit_paper_id": "paper_dc8bace378a282ea",
+    "expected_action": "proceed",
+    "expected_resolved_paper_id": "paper_dc8bace378a282ea",
+    "expected_needs_clarification": false,
+    "notes": "Explicit paper_id should override stale session context."
+  },
+  {
+    "case_id": "short_followup_with_session",
+    "query": "继续讲",
+    "session_current_paper_id": "paper_6bc5d399d6127a64",
+    "expected_action": "constrain",
+    "expected_resolved_paper_id": "paper_6bc5d399d6127a64",
+    "expected_needs_clarification": false,
+    "notes": "Very short continuation should stay on current BLIP-2 paper."
+  },
+  {
+    "case_id": "short_followup_without_session",
+    "query": "继续讲",
+    "expected_action": "ask_clarification",
+    "expected_resolved_paper_id": null,
+    "expected_needs_clarification": true,
+    "notes": "Very short continuation without context should ask clarification."
+  }
+]

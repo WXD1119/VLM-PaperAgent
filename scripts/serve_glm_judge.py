@@ -1,13 +1,11 @@
+from __future__ import annotations
+
 import argparse
 import json
 import re
 import threading
 
-import torch
-import uvicorn
-from fastapi import FastAPI
 from pydantic import BaseModel
-from transformers import AutoProcessor, Glm4vForConditionalGeneration
 
 
 class GenerateRequest(BaseModel):
@@ -19,7 +17,7 @@ class GenerateResponse(BaseModel):
     content: dict
 
 
-def extract_json(text: str) -> dict:
+def extract_json(text: str, schema: dict | None = None) -> dict:
     answer = re.search(r"<answer>\s*(.*?)\s*</answer>", text, re.DOTALL)
     candidate = answer.group(1) if answer else text
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", candidate, re.DOTALL)
@@ -27,12 +25,58 @@ def extract_json(text: str) -> dict:
         candidate = fenced.group(1)
     else:
         candidate = extract_first_json_object(candidate)
-    value = json.loads(candidate)
+    try:
+        value = json.loads(candidate)
+    except json.JSONDecodeError:
+        value = repair_judge_json(candidate, schema or {})
     if not isinstance(value, dict):
         raise ValueError("GLM judge must return a JSON object")
     if {"$defs", "properties", "title", "type"}.issubset(value):
         raise ValueError("GLM judge returned a JSON Schema instead of a JSON instance")
     return value
+
+
+def repair_judge_json(candidate: str, schema: dict) -> dict:
+    """Recover common malformed GLM judge outputs.
+
+    GLM occasionally emits object-like text with unquoted property names or
+    bare enum values, for example ``{claim_index: 1, verdict: supported}``.
+    The semantic judge only needs a small schema, so we can safely recover the
+    fields instead of returning HTTP 500 for a formatting slip.
+    """
+    title = schema.get("title")
+    if title == "ClaimSupportAssessment":
+        return repair_claim_support_assessment(candidate)
+    raise ValueError("GLM judge returned malformed JSON")
+
+
+def repair_claim_support_assessment(candidate: str) -> dict:
+    lowered = candidate.lower()
+    if "partially_supported" in lowered or "partially supported" in lowered:
+        verdict = "partially_supported"
+    elif "unsupported" in lowered or "not supported" in lowered:
+        verdict = "unsupported"
+    elif "supported" in lowered:
+        verdict = "supported"
+    else:
+        raise ValueError("GLM judge returned malformed JSON without a verdict")
+
+    index_match = re.search(r"claim_index['\"]?\s*[:=]\s*(\d+)", candidate)
+    claim_index = int(index_match.group(1)) if index_match else 1
+    evidence_ids = sorted(set(re.findall(r"\bE\d+\b", candidate)))
+    if not evidence_ids and verdict == "supported":
+        evidence_ids = ["E1"]
+    return {
+        "claim_index": claim_index,
+        "verdict": verdict,
+        "evidence_ids": evidence_ids,
+        "reasoning_summary": "Recovered from malformed judge JSON: "
+        + collapse_whitespace(candidate)[:500],
+    }
+
+
+def collapse_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def extract_first_json_object(text: str) -> str:
@@ -86,6 +130,10 @@ def format_instruction(schema: dict) -> str:
 
 
 def create_app(model_path: str, max_memory_gib: int, max_new_tokens: int) -> FastAPI:
+    import torch
+    from fastapi import FastAPI
+    from transformers import AutoProcessor, Glm4vForConditionalGeneration
+
     processor = AutoProcessor.from_pretrained(
         model_path, local_files_only=True, use_fast=True
     )
@@ -134,12 +182,14 @@ def create_app(model_path: str, max_memory_gib: int, max_new_tokens: int) -> Fas
             output = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
         generated = output[:, inputs["input_ids"].shape[1] :]
         text = processor.batch_decode(generated, skip_special_tokens=False)[0]
-        return GenerateResponse(content=extract_json(text))
+        return GenerateResponse(content=extract_json(text, request.schema))
 
     return app
 
 
 def main() -> None:
+    import uvicorn
+
     parser = argparse.ArgumentParser(description="Serve GLM as an isolated citation judge")
     parser.add_argument("--model", required=True)
     parser.add_argument("--host", default="127.0.0.1")

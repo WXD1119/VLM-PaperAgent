@@ -1,0 +1,472 @@
+[
+  {
+    "paper_key": "clip",
+    "title": "Learning Transferable Visual Models From Natural Language Supervision",
+    "short_name": "CLIP",
+    "arxiv_id": "2103.00020",
+    "venue": "ICML 2021",
+    "pdf_url": "https://arxiv.org/pdf/2103.00020.pdf",
+    "filename": "01_CLIP_2103.00020.pdf",
+    "theme": "contrastive_pretraining",
+    "question_seeds": [
+      {
+        "query_id": "clip_training_objective_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "What training objective does CLIP use to align image and text representations?",
+        "expected_answer": "CLIP trains image and text encoders with a contrastive objective over image-text pairs."
+      },
+      {
+        "query_id": "clip_zero_shot_classifier_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How does CLIP build a zero-shot image classifier from natural language prompts?",
+        "expected_answer": "CLIP encodes class-name prompts as text embeddings and compares image embeddings against them."
+      },
+      {
+        "query_id": "clip_dataset_scale_v2",
+        "category": "dataset",
+        "kind": "text",
+        "query": "What scale of image-text data is used to train CLIP?",
+        "expected_answer": "The paper describes training on a large web-scale dataset of image-text pairs."
+      },
+      {
+        "query_id": "clip_distribution_shift_v2",
+        "category": "evaluation",
+        "kind": "figure",
+        "query": "What evidence does CLIP provide for robustness to natural distribution shift?",
+        "expected_answer": "The paper compares zero-shot CLIP against supervised baselines across distribution-shift benchmarks."
+      },
+      {
+        "query_id": "clip_architectures_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "Which image encoder families are evaluated in CLIP?",
+        "expected_answer": "CLIP evaluates ResNet and Vision Transformer image encoders."
+      }
+    ]
+  },
+  {
+    "paper_key": "align",
+    "title": "Scaling Up Visual and Vision-Language Representation Learning With Noisy Text Supervision",
+    "short_name": "ALIGN",
+    "arxiv_id": "2102.05918",
+    "venue": "ICML 2021",
+    "pdf_url": "https://arxiv.org/pdf/2102.05918.pdf",
+    "filename": "02_ALIGN_2102.05918.pdf",
+    "theme": "contrastive_pretraining",
+    "question_seeds": [
+      {
+        "query_id": "align_noisy_supervision_v2",
+        "category": "dataset",
+        "kind": "text",
+        "query": "How does ALIGN use noisy image-text data for vision-language representation learning?",
+        "expected_answer": "ALIGN scales contrastive image-text learning using noisy alt-text style web data."
+      },
+      {
+        "query_id": "align_dual_encoder_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "What encoder architecture does ALIGN use for image-text retrieval?",
+        "expected_answer": "ALIGN uses separate image and text encoders trained into a shared embedding space."
+      },
+      {
+        "query_id": "align_scaling_effect_v2",
+        "category": "evaluation",
+        "kind": "text",
+        "query": "What does ALIGN show about scaling noisy text supervision?",
+        "expected_answer": "The paper reports that large-scale noisy supervision can produce strong transfer performance."
+      },
+      {
+        "query_id": "align_retrieval_benchmarks_v2",
+        "category": "evaluation",
+        "kind": "table",
+        "query": "Which retrieval benchmarks are used to evaluate ALIGN?",
+        "expected_answer": "ALIGN evaluates cross-modal retrieval on standard image-text retrieval benchmarks."
+      },
+      {
+        "query_id": "align_zero_shot_transfer_v2",
+        "category": "evaluation",
+        "kind": "text",
+        "query": "How does ALIGN evaluate zero-shot transfer?",
+        "expected_answer": "The paper evaluates transfer by applying learned image-text representations without task-specific training."
+      }
+    ]
+  },
+  {
+    "paper_key": "albef",
+    "title": "Align before Fuse: Vision and Language Representation Learning with Momentum Distillation",
+    "short_name": "ALBEF",
+    "arxiv_id": "2107.07651",
+    "venue": "NeurIPS 2021",
+    "pdf_url": "https://arxiv.org/pdf/2107.07651.pdf",
+    "filename": "03_ALBEF_2107.07651.pdf",
+    "theme": "contrast_then_fuse",
+    "question_seeds": [
+      {
+        "query_id": "albef_align_before_fuse_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "What does ALBEF mean by aligning before fusing image and text features?",
+        "expected_answer": "ALBEF first aligns unimodal image and text representations with contrastive learning before multimodal fusion."
+      },
+      {
+        "query_id": "albef_momentum_distillation_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How does ALBEF use momentum distillation to learn from noisy web data?",
+        "expected_answer": "ALBEF uses a momentum model to generate pseudo-targets for self-training on noisy image-text pairs."
+      },
+      {
+        "query_id": "albef_cross_modal_attention_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "Where does cross-modal attention appear in the ALBEF architecture?",
+        "expected_answer": "After unimodal alignment, ALBEF fuses image and text tokens through a multimodal encoder with cross-modal interaction."
+      },
+      {
+        "query_id": "albef_pretraining_tasks_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "Which pre-training objectives are used by ALBEF?",
+        "expected_answer": "ALBEF combines contrastive alignment with multimodal understanding objectives such as matching and language modeling."
+      },
+      {
+        "query_id": "albef_retrieval_results_v2",
+        "category": "evaluation",
+        "kind": "table",
+        "query": "What evidence shows ALBEF improves image-text retrieval?",
+        "expected_answer": "The paper reports image-text retrieval results showing ALBEF outperforming previous methods."
+      }
+    ]
+  },
+  {
+    "paper_key": "blip",
+    "title": "BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation",
+    "short_name": "BLIP",
+    "arxiv_id": "2201.12086",
+    "venue": "ICML 2022",
+    "pdf_url": "https://arxiv.org/pdf/2201.12086.pdf",
+    "filename": "04_BLIP_2201.12086.pdf",
+    "theme": "bootstrapped_pretraining",
+    "question_seeds": [
+      {
+        "query_id": "blip_bootstrapping_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How does BLIP bootstrap captions from noisy web image-text data?",
+        "expected_answer": "BLIP uses a captioner and filter to generate and clean synthetic captions for pre-training."
+      },
+      {
+        "query_id": "blip_unified_understanding_generation_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How does BLIP support both vision-language understanding and generation?",
+        "expected_answer": "BLIP uses a unified architecture and objectives that transfer to understanding and generation tasks."
+      },
+      {
+        "query_id": "blip_caption_filter_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "What role does the caption filter play in BLIP?",
+        "expected_answer": "The filter removes noisy synthetic captions so the bootstrapped data is more useful."
+      },
+      {
+        "query_id": "blip_downstream_tasks_v2",
+        "category": "evaluation",
+        "kind": "text",
+        "query": "Which downstream tasks does BLIP evaluate?",
+        "expected_answer": "BLIP evaluates tasks such as image-text retrieval, image captioning and VQA."
+      },
+      {
+        "query_id": "blip_video_transfer_v2",
+        "category": "evaluation",
+        "kind": "text",
+        "query": "What zero-shot video-language transfer result does BLIP report?",
+        "expected_answer": "BLIP demonstrates transfer from image-language pre-training to video-language tasks."
+      }
+    ]
+  },
+  {
+    "paper_key": "flamingo",
+    "title": "Flamingo: a Visual Language Model for Few-Shot Learning",
+    "short_name": "Flamingo",
+    "arxiv_id": "2204.14198",
+    "venue": "NeurIPS 2022",
+    "pdf_url": "https://arxiv.org/pdf/2204.14198.pdf",
+    "filename": "05_Flamingo_2204.14198.pdf",
+    "theme": "few_shot_mllm",
+    "question_seeds": [
+      {
+        "query_id": "flamingo_perceiver_resampler_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "What role does the Perceiver Resampler play in Flamingo?",
+        "expected_answer": "It converts variable-sized visual features into a fixed number of visual tokens for the language model."
+      },
+      {
+        "query_id": "flamingo_gated_cross_attention_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How does Flamingo connect visual features to a frozen language model?",
+        "expected_answer": "Flamingo inserts gated cross-attention layers into the language model while keeping major pretrained components frozen."
+      },
+      {
+        "query_id": "flamingo_interleaved_inputs_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How does Flamingo handle interleaved images, videos and text?",
+        "expected_answer": "Flamingo is designed to ingest sequences containing visual and textual inputs for few-shot prompting."
+      },
+      {
+        "query_id": "flamingo_few_shot_learning_v2",
+        "category": "evaluation",
+        "kind": "text",
+        "query": "What evidence shows Flamingo can perform few-shot learning on vision-language tasks?",
+        "expected_answer": "The paper evaluates Flamingo with few-shot prompts across VQA, captioning and related benchmarks."
+      },
+      {
+        "query_id": "flamingo_training_data_v2",
+        "category": "dataset",
+        "kind": "text",
+        "query": "What types of multimodal data are used to train Flamingo?",
+        "expected_answer": "Flamingo trains on large-scale multimodal web corpora with text, images and videos."
+      }
+    ]
+  },
+  {
+    "paper_key": "coca",
+    "title": "CoCa: Contrastive Captioners are Image-Text Foundation Models",
+    "short_name": "CoCa",
+    "arxiv_id": "2205.01917",
+    "venue": "arXiv 2022",
+    "pdf_url": "https://arxiv.org/pdf/2205.01917.pdf",
+    "filename": "06_CoCa_2205.01917.pdf",
+    "theme": "contrastive_captioning",
+    "question_seeds": [
+      {
+        "query_id": "coca_dual_objectives_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How does CoCa combine contrastive learning with captioning?",
+        "expected_answer": "CoCa jointly optimizes contrastive image-text alignment and autoregressive captioning objectives."
+      },
+      {
+        "query_id": "coca_decoder_cross_attention_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How is cross-attention arranged in CoCa's decoder?",
+        "expected_answer": "CoCa omits cross-attention in early decoder layers and uses later decoder layers for multimodal cross-attention."
+      },
+      {
+        "query_id": "coca_zero_shot_imagenet_v2",
+        "category": "evaluation",
+        "kind": "text",
+        "query": "What zero-shot ImageNet performance does CoCa report?",
+        "expected_answer": "The paper reports strong zero-shot ImageNet classification performance for CoCa."
+      },
+      {
+        "query_id": "coca_downstream_tasks_v2",
+        "category": "evaluation",
+        "kind": "text",
+        "query": "Which downstream task families does CoCa evaluate?",
+        "expected_answer": "CoCa evaluates recognition, retrieval, multimodal understanding and captioning tasks."
+      },
+      {
+        "query_id": "coca_foundation_model_claim_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "Why does CoCa describe contrastive captioners as image-text foundation models?",
+        "expected_answer": "Because a single pretraining setup supports both representation learning and text generation across many tasks."
+      }
+    ]
+  },
+  {
+    "paper_key": "blip2",
+    "title": "BLIP-2: Bootstrapping Language-Image Pre-training with Frozen Image Encoders and Large Language Models",
+    "short_name": "BLIP-2",
+    "arxiv_id": "2301.12597",
+    "venue": "ICML 2023",
+    "pdf_url": "https://arxiv.org/pdf/2301.12597.pdf",
+    "filename": "07_BLIP2_2301.12597.pdf",
+    "theme": "frozen_encoder_llm_bridge",
+    "question_seeds": [
+      {
+        "query_id": "blip2_qformer_bridge_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How does Q-Former bridge the frozen image encoder and frozen language model in BLIP-2?",
+        "expected_answer": "Q-Former learns query embeddings that extract visual features and pass them to the frozen LLM."
+      },
+      {
+        "query_id": "blip2_two_stage_pretraining_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "What are the two stages of BLIP-2 pre-training?",
+        "expected_answer": "BLIP-2 first learns vision-language representation with a frozen image encoder, then learns vision-to-language generation with a frozen LLM."
+      },
+      {
+        "query_id": "blip2_learnable_queries_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "What are learnable query embeddings used for in Q-Former?",
+        "expected_answer": "They interact with frozen visual features to extract a compact set of informative visual representations."
+      },
+      {
+        "query_id": "blip2_soft_visual_prompts_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How are Q-Former outputs used as soft visual prompts for the LLM?",
+        "expected_answer": "Projected query outputs are prepended or supplied to the LLM embedding space as visual prompts."
+      },
+      {
+        "query_id": "blip2_retrieval_table_v2",
+        "category": "evaluation",
+        "kind": "table",
+        "query": "Which BLIP-2 table reports image-text retrieval results?",
+        "expected_answer": "The relevant table compares BLIP-2 retrieval results on image-text retrieval benchmarks."
+      }
+    ]
+  },
+  {
+    "paper_key": "llava",
+    "title": "Visual Instruction Tuning",
+    "short_name": "LLaVA",
+    "arxiv_id": "2304.08485",
+    "venue": "NeurIPS 2023",
+    "pdf_url": "https://arxiv.org/pdf/2304.08485.pdf",
+    "filename": "08_LLaVA_2304.08485.pdf",
+    "theme": "visual_instruction_tuning",
+    "question_seeds": [
+      {
+        "query_id": "llava_architecture_connector_v2",
+        "category": "method",
+        "kind": "equation",
+        "query": "How does LLaVA connect the vision encoder with the language model?",
+        "expected_answer": "LLaVA projects visual features from a CLIP vision encoder into the language embedding space with a trainable projection matrix."
+      },
+      {
+        "query_id": "llava_gpt4_data_generation_v2",
+        "category": "dataset",
+        "kind": "text",
+        "query": "How does LLaVA use GPT-4 to generate visual instruction-following data?",
+        "expected_answer": "LLaVA prompts GPT-4 with image-related metadata to create multimodal instruction data."
+      },
+      {
+        "query_id": "llava_two_stage_training_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "What are the two training stages used by LLaVA?",
+        "expected_answer": "LLaVA first aligns visual and language features, then performs visual instruction tuning."
+      },
+      {
+        "query_id": "llava_scienceqa_v2",
+        "category": "evaluation",
+        "kind": "table",
+        "query": "How does LLaVA perform on ScienceQA with visual inputs?",
+        "expected_answer": "The paper reports strong ScienceQA performance after visual instruction tuning."
+      },
+      {
+        "query_id": "llava_broader_impact_v2",
+        "category": "limitation",
+        "kind": "text",
+        "query": "What risks or broader impacts does LLaVA discuss?",
+        "expected_answer": "The paper discusses risks inherited from LLMs and vision encoders as well as deployment concerns."
+      }
+    ]
+  },
+  {
+    "paper_key": "minigpt4",
+    "title": "MiniGPT-4: Enhancing Vision-Language Understanding with Advanced Large Language Models",
+    "short_name": "MiniGPT-4",
+    "arxiv_id": "2304.10592",
+    "venue": "ICLR 2024",
+    "pdf_url": "https://arxiv.org/pdf/2304.10592.pdf",
+    "filename": "09_MiniGPT4_2304.10592.pdf",
+    "theme": "frozen_vit_llm_projection",
+    "question_seeds": [
+      {
+        "query_id": "minigpt4_projection_layer_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "How does MiniGPT-4 align a frozen visual encoder with a frozen large language model?",
+        "expected_answer": "MiniGPT-4 uses a projection layer to align visual features with the Vicuna language model."
+      },
+      {
+        "query_id": "minigpt4_two_stage_training_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "Why does MiniGPT-4 use a second-stage detailed image description dataset?",
+        "expected_answer": "The second stage improves generation quality and reduces unnatural outputs from the first stage."
+      },
+      {
+        "query_id": "minigpt4_emergent_capabilities_v2",
+        "category": "evaluation",
+        "kind": "text",
+        "query": "What emerging multimodal capabilities does MiniGPT-4 report?",
+        "expected_answer": "MiniGPT-4 reports abilities such as detailed image description, story writing and website generation from sketches."
+      },
+      {
+        "query_id": "minigpt4_frozen_components_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "Which components are frozen in MiniGPT-4 training?",
+        "expected_answer": "The visual encoder and advanced LLM are frozen while an alignment projection is trained."
+      },
+      {
+        "query_id": "minigpt4_limitations_v2",
+        "category": "limitation",
+        "kind": "text",
+        "query": "What output quality problem does MiniGPT-4 observe after the first training stage?",
+        "expected_answer": "The paper observes unnatural language such as repetition or fragmented output."
+      }
+    ]
+  },
+  {
+    "paper_key": "instructblip",
+    "title": "InstructBLIP: Towards General-purpose Vision-Language Models with Instruction Tuning",
+    "short_name": "InstructBLIP",
+    "arxiv_id": "2305.06500",
+    "venue": "NeurIPS 2023",
+    "pdf_url": "https://arxiv.org/pdf/2305.06500.pdf",
+    "filename": "10_InstructBLIP_2305.06500.pdf",
+    "theme": "instruction_tuned_vlm",
+    "question_seeds": [
+      {
+        "query_id": "instructblip_instruction_aware_qformer_v2",
+        "category": "method",
+        "kind": "text",
+        "query": "What is the instruction-aware Query Transformer in InstructBLIP?",
+        "expected_answer": "It extracts visual features conditioned on the given instruction rather than using instruction-agnostic queries."
+      },
+      {
+        "query_id": "instructblip_dataset_conversion_v2",
+        "category": "dataset",
+        "kind": "text",
+        "query": "How does InstructBLIP transform existing datasets for instruction tuning?",
+        "expected_answer": "It converts many public vision-language datasets into instruction tuning format."
+      },
+      {
+        "query_id": "instructblip_held_in_out_v2",
+        "category": "evaluation",
+        "kind": "text",
+        "query": "How does InstructBLIP evaluate held-in and held-out datasets?",
+        "expected_answer": "It trains on held-in datasets and evaluates zero-shot generalization on held-out datasets."
+      },
+      {
+        "query_id": "instructblip_vs_blip2_v2",
+        "category": "comparison",
+        "kind": "text",
+        "query": "How does InstructBLIP improve over BLIP-2?",
+        "expected_answer": "InstructBLIP instruction-tunes BLIP-2 style models and uses instruction-aware visual feature extraction."
+      },
+      {
+        "query_id": "instructblip_scienceqa_v2",
+        "category": "evaluation",
+        "kind": "text",
+        "query": "What ScienceQA performance does InstructBLIP report?",
+        "expected_answer": "The paper reports strong ScienceQA accuracy when fine-tuned on individual downstream tasks."
+      }
+    ]
+  }
+]
