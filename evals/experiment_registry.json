@@ -162,6 +162,59 @@
     "limitations": "The frozen development set contains 16 queries over three papers. Results are suitable as a development ablation, not a final held-out benchmark."
   },
   {
+    "experiment_id": "retrieval_ablation_v2_48",
+    "date": "2026-07-13",
+    "category": "retrieval_ablation",
+    "status": "completed",
+    "dataset": {
+      "name": "retrieval_golden.v2.json",
+      "cases": 48,
+      "papers": 10,
+      "domain": "VLM papers",
+      "annotation": "manual multi-evidence chunk labels"
+    },
+    "metrics": {
+      "BM25": {
+        "hit_at_1": 0.625,
+        "hit_at_5": 1.0,
+        "recall_at_1": 0.1679,
+        "recall_at_5": 0.6144,
+        "mrr": 0.7733,
+        "ndcg_at_5": 0.6042
+      },
+      "BGE-M3_dense": {
+        "hit_at_1": 0.7083,
+        "hit_at_5": 1.0,
+        "recall_at_1": 0.203,
+        "recall_at_5": 0.6005,
+        "mrr": 0.842,
+        "ndcg_at_5": 0.6377
+      },
+      "BM25_BGE-M3_RRF": {
+        "hit_at_1": 0.7917,
+        "hit_at_5": 1.0,
+        "recall_at_1": 0.2252,
+        "recall_at_5": 0.6606,
+        "mrr": 0.8889,
+        "ndcg_at_5": 0.6906
+      },
+      "RRF_BGE_reranker_v2_m3": {
+        "hit_at_1": 0.75,
+        "hit_at_5": 1.0,
+        "recall_at_1": 0.2099,
+        "recall_at_5": 0.6944,
+        "mrr": 0.8611,
+        "ndcg_at_5": 0.6943
+      }
+    },
+    "conclusion": "在 10 篇 VLM 论文、48 个手工标注的多证据检索问题上，四种检索方案的 Hit@5 都达到 1.0，说明前 5 条结果总能召回至少一个可用证据。BM25+BGE-M3 的 RRF 融合取得最高 Hit@1=0.7917 和 MRR=0.8889，最适合作为回答前的默认证据召回方案；加入 BGE reranker 后取得最高 Recall@5=0.6944 和 nDCG@5=0.6943，说明它更擅长提升前 5 条中的多证据覆盖和排序质量。Recall@1 偏低并不代表检索不可用，而是因为每个问题通常标注多个相关 chunk，单条 top-1 很难覆盖完整证据集合。",
+    "pitfalls": [
+      "首次 v2 dense/hybrid 评测发现 Chroma collection_count=0，导致 Dense 检索结果异常偏低；重新执行 index_dense.py 后恢复正常。",
+      "重建索引后 collection_count=864 而当前 chunks=863，说明 Chroma 中可能残留 1 条旧记录；后续通过 index_dense.py --reset 支持干净重建。"
+    ],
+    "limitations": "v2 仍是开发集性质，问题和证据由人工标注，尚未划分独立 held-out 测试集；reranker 带来更高多证据覆盖，但会增加推理成本。"
+  },
+  {
     "experiment_id": "citation_judge_smoke_v1_3",
     "date": "2026-07-09",
     "category": "answer_citation_evaluation",

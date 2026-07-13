@@ -22,13 +22,16 @@ def main() -> None:
     result = evaluate_bm25(index, cases, top_k=args.top_k)
 
     print(f"cases: {len(result.cases)}")
+    print(f"Hit@1: {result.mean_hit_at_1:.4f}")
+    print(f"Hit@5: {result.mean_hit_at_5:.4f}")
     print(f"Recall@1: {result.macro_recall_at_1:.4f}")
     print(f"Recall@5: {result.macro_recall_at_5:.4f}")
     print(f"MRR: {result.mean_reciprocal_rank:.4f}")
     print(f"nDCG@5: {result.mean_ndcg_at_5:.4f}")
     for case in result.cases:
         print(
-            f"{case.query_id}: R@1={case.recall_at_1:.3f} "
+            f"{case.query_id}: H@1={case.hit_at_1:.0f} H@5={case.hit_at_5:.0f} "
+            f"R@1={case.recall_at_1:.3f} "
             f"R@5={case.recall_at_5:.3f} RR={case.reciprocal_rank:.3f} "
             f"nDCG@5={case.ndcg_at_5:.3f}"
         )

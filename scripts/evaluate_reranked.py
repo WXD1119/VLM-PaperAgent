@@ -42,6 +42,18 @@ def main() -> None:
         args.embedding_model, device=args.device, local_files_only=args.offline
     )
     dense = ChromaVectorStore(args.db, args.collection, encoder)
+    collection_count = dense.count()
+    print(f"chunks: {len(chunks)}")
+    print(f"collection_count: {collection_count}")
+    if collection_count == 0:
+        raise SystemExit(
+            "Chroma collection is empty; run scripts/index_dense.py before reranked evaluation."
+        )
+    if collection_count != len(chunks):
+        print(
+            "WARNING: Chroma collection count differs from loaded chunks; "
+            "dense retrieval may be stale. Re-run scripts/index_dense.py if this is unexpected."
+        )
     hybrid = HybridRetriever(sparse, dense, args.rrf_k, args.candidate_k)
     cross_encoder = CrossEncoderReranker(
         args.reranker_model, device=args.device, local_files_only=args.offline
@@ -50,13 +62,16 @@ def main() -> None:
     result = evaluate_retriever(retriever, cases, top_k=args.top_k)
 
     print(f"cases: {len(result.cases)}")
+    print(f"Hit@1: {result.mean_hit_at_1:.4f}")
+    print(f"Hit@5: {result.mean_hit_at_5:.4f}")
     print(f"Recall@1: {result.macro_recall_at_1:.4f}")
     print(f"Recall@5: {result.macro_recall_at_5:.4f}")
     print(f"MRR: {result.mean_reciprocal_rank:.4f}")
     print(f"nDCG@5: {result.mean_ndcg_at_5:.4f}")
     for case in result.cases:
         print(
-            f"{case.query_id}: R@1={case.recall_at_1:.3f} "
+            f"{case.query_id}: H@1={case.hit_at_1:.0f} H@5={case.hit_at_5:.0f} "
+            f"R@1={case.recall_at_1:.3f} "
             f"R@5={case.recall_at_5:.3f} RR={case.reciprocal_rank:.3f} "
             f"nDCG@5={case.ndcg_at_5:.3f}"
         )

@@ -7,6 +7,13 @@ def recall_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
     return len(set(retrieved[:k]) & relevant) / len(relevant)
 
 
+def hit_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
+    """Return 1 when at least one relevant item appears in the top-k results."""
+    if not relevant:
+        return 1.0
+    return 1.0 if set(retrieved[:k]) & relevant else 0.0
+
+
 def reciprocal_rank(retrieved: list[str], relevant: set[str]) -> float:
     for rank, item in enumerate(retrieved, start=1):
         if item in relevant:

@@ -4,7 +4,7 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 from paper_agent.domain.chunk import ChunkKind
-from paper_agent.evaluation.retrieval import ndcg_at_k, recall_at_k, reciprocal_rank
+from paper_agent.evaluation.retrieval import hit_at_k, ndcg_at_k, recall_at_k, reciprocal_rank
 
 
 class RetrievalIndex(Protocol):
@@ -32,6 +32,8 @@ class RetrievalCase(BaseModel):
 class RetrievalCaseResult(BaseModel):
     query_id: str
     retrieved_chunk_ids: list[str]
+    hit_at_1: float
+    hit_at_5: float
     recall_at_1: float
     recall_at_5: float
     reciprocal_rank: float
@@ -40,6 +42,8 @@ class RetrievalCaseResult(BaseModel):
 
 class RetrievalEvaluation(BaseModel):
     cases: list[RetrievalCaseResult]
+    mean_hit_at_1: float
+    mean_hit_at_5: float
     macro_recall_at_1: float
     macro_recall_at_5: float
     mean_reciprocal_rank: float
@@ -74,6 +78,8 @@ def evaluate_retriever(
             RetrievalCaseResult(
                 query_id=case.query_id,
                 retrieved_chunk_ids=retrieved,
+                hit_at_1=hit_at_k(retrieved, case.relevant_chunk_ids, 1),
+                hit_at_5=hit_at_k(retrieved, case.relevant_chunk_ids, 5),
                 recall_at_1=recall_at_k(retrieved, case.relevant_chunk_ids, 1),
                 recall_at_5=recall_at_k(retrieved, case.relevant_chunk_ids, 5),
                 reciprocal_rank=reciprocal_rank(retrieved, case.relevant_chunk_ids),
@@ -82,6 +88,8 @@ def evaluate_retriever(
         )
     return RetrievalEvaluation(
         cases=results,
+        mean_hit_at_1=mean(result.hit_at_1 for result in results),
+        mean_hit_at_5=mean(result.hit_at_5 for result in results),
         macro_recall_at_1=mean(result.recall_at_1 for result in results),
         macro_recall_at_5=mean(result.recall_at_5 for result in results),
         mean_reciprocal_rank=mean(result.reciprocal_rank for result in results),

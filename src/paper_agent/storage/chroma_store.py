@@ -14,6 +14,7 @@ class ChromaVectorStore:
         path: str | Path,
         collection_name: str,
         encoder: EmbeddingEncoder,
+        reset: bool = False,
     ) -> None:
         try:
             import chromadb
@@ -23,6 +24,12 @@ class ChromaVectorStore:
             ) from exc
         self.encoder = encoder
         self.client = chromadb.PersistentClient(path=str(path))
+        if reset:
+            try:
+                self.client.delete_collection(name=collection_name)
+            except Exception as exc:
+                if "does not exist" not in str(exc).lower():
+                    raise
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
             metadata={
@@ -41,6 +48,9 @@ class ChromaVectorStore:
                 f"stored=({stored_model}, {stored_dimension}), "
                 f"requested=({encoder.model_name}, {encoder.dimension})"
             )
+
+    def count(self) -> int:
+        return int(self.collection.count())
 
     def upsert(self, chunks: list[RetrievalChunk], batch_size: int = 32) -> int:
         if batch_size < 1:

@@ -18,6 +18,11 @@ def main() -> None:
     parser.add_argument("--device", default=None)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--offline", action="store_true")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Delete and recreate the target Chroma collection before indexing.",
+    )
     args = parser.parse_args()
 
     chunks = chunks_from_bundles(load_chunk_bundles(args.chunks))
@@ -27,7 +32,7 @@ def main() -> None:
         batch_size=args.batch_size,
         local_files_only=args.offline,
     )
-    store = ChromaVectorStore(args.db, args.collection, encoder)
+    store = ChromaVectorStore(args.db, args.collection, encoder, reset=args.reset)
     indexed = store.upsert(chunks, batch_size=args.batch_size)
     print(f"model: {encoder.model_name}")
     print(f"dimension: {encoder.dimension}")

@@ -1,5 +1,6 @@
 from paper_agent.domain.chunk import ChunkKind, RetrievalChunk
 from paper_agent.retrieval.dense import InMemoryDenseIndex
+from paper_agent.storage.chroma_store import ChromaVectorStore
 
 
 class FakeEncoder:
@@ -57,3 +58,35 @@ def test_dense_index_rejects_invalid_vector_dimension() -> None:
         raise AssertionError("dimension mismatch was accepted")
     except ValueError as exc:
         assert "dimension mismatch" in str(exc)
+
+
+def test_chroma_store_reset_deletes_collection_before_recreate(monkeypatch, tmp_path) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class FakeCollection:
+        metadata = {"embedding_model": "fake-v1", "embedding_dimension": 2}
+
+        def count(self) -> int:
+            return 0
+
+    class FakeClient:
+        def __init__(self, path: str) -> None:
+            calls.append(("client", path))
+
+        def delete_collection(self, name: str) -> None:
+            calls.append(("delete", name))
+
+        def get_or_create_collection(self, **kwargs):
+            calls.append(("get_or_create", kwargs["name"]))
+            return FakeCollection()
+
+    class FakeChromaModule:
+        PersistentClient = FakeClient
+
+    monkeypatch.setitem(__import__("sys").modules, "chromadb", FakeChromaModule())
+
+    store = ChromaVectorStore(tmp_path, "paper_chunks", FakeEncoder(), reset=True)
+
+    assert store.count() == 0
+    assert ("delete", "paper_chunks") in calls
+    assert calls[-1] == ("get_or_create", "paper_chunks")

@@ -29,16 +29,25 @@ def main() -> None:
         local_files_only=args.offline,
     )
     store = ChromaVectorStore(args.db, args.collection, encoder)
+    collection_count = store.count()
+    print(f"collection_count: {collection_count}")
+    if collection_count == 0:
+        raise SystemExit(
+            "Chroma collection is empty; run scripts/index_dense.py before dense evaluation."
+        )
     result = evaluate_retriever(store, cases, top_k=args.top_k)
 
     print(f"cases: {len(result.cases)}")
+    print(f"Hit@1: {result.mean_hit_at_1:.4f}")
+    print(f"Hit@5: {result.mean_hit_at_5:.4f}")
     print(f"Recall@1: {result.macro_recall_at_1:.4f}")
     print(f"Recall@5: {result.macro_recall_at_5:.4f}")
     print(f"MRR: {result.mean_reciprocal_rank:.4f}")
     print(f"nDCG@5: {result.mean_ndcg_at_5:.4f}")
     for case in result.cases:
         print(
-            f"{case.query_id}: R@1={case.recall_at_1:.3f} "
+            f"{case.query_id}: H@1={case.hit_at_1:.0f} H@5={case.hit_at_5:.0f} "
+            f"R@1={case.recall_at_1:.3f} "
             f"R@5={case.recall_at_5:.3f} RR={case.reciprocal_rank:.3f} "
             f"nDCG@5={case.ndcg_at_5:.3f}"
         )
