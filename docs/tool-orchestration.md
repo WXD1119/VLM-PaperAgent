@@ -35,6 +35,8 @@ Concepts:
 - `ToolResult`: isolated result for success, error, timeout or unknown tool.
 - `ResourceAccess`: `read` or `write`.
 - `ToolOrchestrator`: batches compatible calls and serializes conflicts.
+- `ToolCall.depends_on`: declares a dependency DAG, so dependent calls wait for
+  prerequisite results.
 
 Conflict policy:
 
@@ -42,6 +44,10 @@ Conflict policy:
 - write/read or write/write on the same resource are split into different batches;
 - unknown tools return `UNKNOWN_TOOL` instead of crashing the whole run;
 - timeout returns `TIMEOUT` for that call instead of crashing the whole run.
+- transient failures can be retried with `ToolSpec.max_retries` and exponential
+  backoff via `retry_backoff_s`;
+- each result records `attempts` and `elapsed_ms` for a lightweight execution trace;
+- unresolved dependencies become structured `ERROR` results.
 
 ## Demo
 
@@ -68,6 +74,9 @@ ContextGuard -> retrieve_chunks + query_graph_concepts + recall_summary_memory
 The plan stops before LLM answer generation, so it is cheap to test and does not require
 GPU models. It proves that the project has a real tool-calling path for retrieval,
 graph lookup and memory update.
+
+The normal `scripts/ask.py` path also routes chunk retrieval through this boundary, so
+the end-to-end demo exercises timeout, retry and structured-result handling.
 
 Run:
 

@@ -259,12 +259,29 @@ M3 starts using memory to reduce ambiguous follow-up errors and multi-turn topic
 The first implementation is deterministic and testable:
 
 - if the user provides an explicit `paper_id`, that always wins;
+- explicit paper/entity cues are resolved dynamically from the effective Paper KG;
+- paper-title matches are authoritative, while concept matches use per-paper mention
+  counts and only auto-select a paper when one candidate clearly dominates;
+- if a concept is shared by multiple papers without a dominant candidate, the guard
+  returns candidate paper IDs and asks the user to disambiguate;
 - if the query is an ambiguous follow-up such as "this method" or "这个方法", and session
   memory has a `current_paper_id`, retrieval is constrained to that paper;
 - if the query is ambiguous and no session paper exists, the guard asks for
   clarification instead of searching the whole corpus;
 - if the query is a clear new question, the guard does not force it into the previous
   session paper.
+
+The practical priority order is:
+
+```text
+explicit paper_id > explicit query entity > ambiguous follow-up session context
+```
+
+This matters for cases like: the session is currently reading LLaVA, but the user asks
+"How does Q-Former bridge the frozen image encoder and frozen language model?" The guard
+should resolve the query to the BLIP-2 paper instead of answering from LLaVA evidence.
+This mapping is not hard-coded: adding a paper and its concepts to a graph workspace
+makes it available to the resolver automatically.
 
 Useful command:
 
@@ -275,6 +292,22 @@ python scripts/memory_context.py \
 
 In `scripts/ask.py`, the context guard is enabled by default. Use
 `--no-context-guard` for ablation or debugging.
+
+Use the user's effective graph workspace when it contains papers that are not in the
+base graph:
+
+```bash
+python scripts/memory_context.py \
+  --query "How does Q-Former connect vision and language?" \
+  --graph-workspace artifacts/graph_workspaces/ws_wxd_demo
+```
+
+For the API, configure the same graph with:
+
+```bash
+export PAPER_AGENT_GRAPH=artifacts/graph
+export PAPER_AGENT_GRAPH_WORKSPACE=artifacts/graph_workspaces/ws_wxd_demo
+```
 
 The `/ask` API also exposes the guard decision as `context`:
 
@@ -299,6 +332,7 @@ M3 also adds a context-guard evaluation set:
 ```bash
 python scripts/evaluate_context_guard.py \
   --golden evals/context_guard.seed.json \
+  --graph-workspace artifacts/graph_workspaces/ws_wxd_demo \
   --output artifacts/evals/context_guard.seed.json
 ```
 
@@ -324,6 +358,8 @@ Current implementation:
   turns. It extracts summary text, paper IDs, key entities, decisions and unresolved
   questions.
 - `SummaryMemoryStore`: append-only JSONL store for compressed summaries.
+- `compress_episode_memory()`: checks the cursor after an episodic event and writes a
+  summary only when pending events exceed the sliding-window size.
 - `InMemorySummaryVectorStore`: lightweight vector recall over summaries using a local
   hashing embedder.
 
@@ -367,3 +403,7 @@ Compression trigger:
   newest `--window-size` events remain active;
 - after writing a summary, the cursor is advanced to the last event included in that
   summary, preventing repeated compression of the same events.
+
+When `scripts/ask.py --log-episode` is used, this compression check runs automatically
+after the answer event is appended. The default window is six events and can be changed
+with `--summary-window`. Summary memory remains separate from the Paper KG.

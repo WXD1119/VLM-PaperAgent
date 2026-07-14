@@ -5,17 +5,24 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from paper_agent.evaluation import ContextGuardCase, evaluate_context_guard
+from paper_agent.memory import ContextGuard, load_graph_entity_resolver
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate memory-aware context guard decisions")
     parser.add_argument("--golden", required=True, type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--graph", default="artifacts/graph")
+    parser.add_argument("--graph-workspace", default=None)
     args = parser.parse_args()
 
     raw_cases = json.loads(args.golden.read_text(encoding="utf-8"))
     cases = TypeAdapter(list[ContextGuardCase]).validate_python(raw_cases)
-    result = evaluate_context_guard(cases)
+    resolver = load_graph_entity_resolver(
+        graph_path=args.graph,
+        workspace_path=args.graph_workspace,
+    )
+    result = evaluate_context_guard(cases, guard=ContextGuard(resolver))
 
     print(f"cases: {result.case_count}")
     print(f"Accuracy: {result.accuracy:.4f}")

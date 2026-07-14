@@ -16,6 +16,7 @@ from paper_agent.memory import (
     SummaryMemoryStore,
     SummaryCursorStore,
     build_summary_vector_store,
+    compress_episode_memory,
     summarize_new_episodes,
 )
 from paper_agent.memory.time import format_local_time
@@ -187,3 +188,32 @@ def test_summarize_new_episodes_waits_until_pending_exceeds_window(tmp_path):
     assert result.active_window_events == 2
     assert result.overflow_events == 0
     assert result.summary is None
+
+
+def test_compress_episode_memory_writes_once_after_window_overflow(tmp_path):
+    episode_store = EpisodicMemoryStore(tmp_path / "episodes.jsonl")
+    summary_store = SummaryMemoryStore(tmp_path / "summaries.jsonl")
+    cursor_store = SummaryCursorStore(tmp_path / "summary_cursor.json")
+    for index in range(4):
+        episode_store.log("event", f"paper_abc123 decision {index}", {"paper_id": "paper_abc123"})
+
+    result = compress_episode_memory(
+        episode_store,
+        summary_store,
+        cursor_store,
+        window_size=2,
+    )
+
+    assert result.written
+    assert result.overflow_events == 2
+    assert len(summary_store.list()) == 1
+    assert cursor_store.load().last_summarized_event_id == result.summary.source_turn_ids[-1]
+
+    again = compress_episode_memory(
+        episode_store,
+        summary_store,
+        cursor_store,
+        window_size=2,
+    )
+    assert not again.written
+    assert len(summary_store.list()) == 1

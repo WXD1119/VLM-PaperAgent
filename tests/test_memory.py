@@ -16,9 +16,11 @@ from paper_agent.domain import (
     SemanticCitationReport,
     SupportVerdict,
 )
+from paper_agent.graph import EdgeType, GraphDocument, GraphEdge, GraphNode, NodeType
 from paper_agent.memory import (
     ContextGuard,
     ContextGuardAction,
+    GraphEntityResolver,
     Episode,
     EpisodicMemoryStore,
     MemoryAction,
@@ -35,6 +37,48 @@ from paper_agent.memory import (
     list_answer_artifacts,
 )
 from scripts.memory_apply import apply_memory_decision
+
+
+def sample_entity_graph() -> GraphDocument:
+    nodes = [
+        GraphNode(
+            node_id="paper:paper_blip2",
+            node_type=NodeType.PAPER,
+            label="BLIP-2: Bootstrapping Language-Image Pre-training",
+            properties={"paper_id": "paper_blip2", "title": "BLIP-2: Bootstrapping Language-Image Pre-training"},
+        ),
+        GraphNode(
+            node_id="paper:paper_llava",
+            node_type=NodeType.PAPER,
+            label="Visual Instruction Tuning",
+            properties={"paper_id": "paper_llava", "title": "Visual Instruction Tuning"},
+        ),
+        GraphNode(node_id="concept:q-former", node_type=NodeType.CONCEPT, label="Q-Former", properties={"aliases": ["QFormer"]}),
+        GraphNode(node_id="concept:llava", node_type=NodeType.CONCEPT, label="LLaVA"),
+        GraphNode(node_id="concept:vision-language-alignment", node_type=NodeType.CONCEPT, label="vision-language alignment"),
+    ]
+    for index, paper_id in enumerate(["paper_blip2"] * 3 + ["paper_llava"] * 3, start=1):
+        nodes.append(
+            GraphNode(
+                node_id=f"chunk:{index}",
+                node_type=NodeType.CHUNK,
+                label=f"chunk {index}",
+                properties={"paper_id": paper_id, "chunk_id": f"chunk-{index}"},
+            )
+        )
+    edges = [
+        GraphEdge(edge_id=f"mention:qformer:{index}", source_id=f"chunk:{index}", target_id="concept:q-former", edge_type=EdgeType.MENTIONS)
+        for index in [1, 2, 3, 4]
+    ]
+    edges.extend(
+        GraphEdge(edge_id=f"mention:llava:{index}", source_id=f"chunk:{index}", target_id="concept:llava", edge_type=EdgeType.MENTIONS)
+        for index in [4, 5, 6]
+    )
+    edges.extend(
+        GraphEdge(edge_id=f"mention:alignment:{index}", source_id=f"chunk:{index}", target_id="concept:vision-language-alignment", edge_type=EdgeType.MENTIONS)
+        for index in [1, 4]
+    )
+    return GraphDocument(nodes=nodes, edges=edges)
 
 
 def sample_answer(abstained: bool = False) -> AnswerBundle:
@@ -222,7 +266,7 @@ def test_context_guard_asks_when_ambiguous_followup_has_no_context():
 def test_context_guard_respects_explicit_paper_id_over_session_memory():
     state = SessionState(current_paper_id="paper_blip2")
 
-    decision = ContextGuard().decide(
+    decision = ContextGuard(GraphEntityResolver(sample_entity_graph())).decide(
         "这个方法怎么样？",
         explicit_paper_id="paper_llava",
         session=state,
@@ -241,6 +285,48 @@ def test_context_guard_does_not_constrain_clear_new_question_to_old_session_pape
     assert decision.action == ContextGuardAction.PROCEED
     assert decision.resolved_paper_id is None
     assert not decision.needs_clarification
+
+
+def test_context_guard_query_entity_overrides_stale_session_paper():
+    state = SessionState(current_paper_id="paper_dc8bace378a282ea")
+
+    decision = ContextGuard(GraphEntityResolver(sample_entity_graph())).decide(
+        "How does Q-Former bridge the frozen image encoder and frozen language model?",
+        session=state,
+    )
+
+    assert decision.action == ContextGuardAction.PROCEED
+    assert decision.resolved_paper_id == "paper_blip2"
+    assert not decision.needs_clarification
+    assert "resolved paper_id from explicit query entity" in decision.context_notes
+    assert decision.warnings == [
+        "query entity overrides stale current_paper_id from session memory"
+    ]
+
+
+def test_context_guard_resolves_llava_entity_without_explicit_paper_id():
+    state = SessionState(current_paper_id="paper_6bc5d399d6127a64")
+
+    decision = ContextGuard(GraphEntityResolver(sample_entity_graph())).decide(
+        "How does LLaVA connect the vision encoder with the language model?",
+        session=state,
+    )
+
+    assert decision.action == ContextGuardAction.PROCEED
+    assert decision.resolved_paper_id == "paper_llava"
+    assert not decision.needs_clarification
+
+
+def test_context_guard_asks_when_concept_maps_to_multiple_papers():
+    decision = ContextGuard(GraphEntityResolver(sample_entity_graph())).decide(
+        "How is vision-language alignment implemented?"
+    )
+
+    assert decision.action == ContextGuardAction.ASK_CLARIFICATION
+    assert decision.needs_clarification
+    assert decision.resolved_paper_id is None
+    assert decision.candidate_paper_ids == ["paper_blip2", "paper_llava"]
+    assert "multiple papers" in decision.clarification_question
 
 
 def test_memory_policy_routes_candidates_to_separate_memory_layers():

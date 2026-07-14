@@ -105,3 +105,43 @@ def test_tool_orchestrator_isolates_unknown_tools_and_errors():
     assert results[0].error == "boom"
     assert results[1].status == ToolStatus.UNKNOWN_TOOL
     assert results[1].error == "unknown tool: missing"
+
+
+def test_tool_orchestrator_retries_transient_failure_and_records_attempts():
+    state = {"calls": 0}
+
+    def flaky(_args):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise RuntimeError("temporary")
+        return "ok"
+
+    orchestrator = ToolOrchestrator(
+        [ToolSpec(name="flaky", handler=flaky, max_retries=1)]
+    )
+
+    result = orchestrator.run_many([ToolCall(call_id="flaky-1", tool_name="flaky")])[0]
+
+    assert result.status == ToolStatus.SUCCESS
+    assert result.output == "ok"
+    assert result.attempts == 2
+
+
+def test_tool_orchestrator_respects_dependencies_before_parallel_batches():
+    events = []
+    orchestrator = ToolOrchestrator(
+        [
+            ToolSpec(name="retrieve", handler=lambda args: events.append("retrieve") or ["E1"]),
+            ToolSpec(name="answer", handler=lambda args: events.append("answer") or "A"),
+        ]
+    )
+
+    results = orchestrator.run_many(
+        [
+            ToolCall(call_id="answer", tool_name="answer", depends_on=("retrieve",)),
+            ToolCall(call_id="retrieve", tool_name="retrieve"),
+        ]
+    )
+
+    assert [result.call_id for result in results] == ["answer", "retrieve"]
+    assert events == ["retrieve", "answer"]

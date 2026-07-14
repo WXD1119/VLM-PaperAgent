@@ -9,8 +9,11 @@ from paper_agent.graph.query import GraphQuery
 from paper_agent.memory import (
     ContextGuard,
     ContextGuardDecision,
+    GraphEntityResolver,
     SessionMemoryStore,
     SummaryMemoryStore,
+    SummaryCursorStore,
+    compress_episode_memory,
     UserProfileStore,
     build_summary_vector_store,
 )
@@ -43,6 +46,8 @@ class PaperQAToolPlanResult(BaseModel):
     memory_recall_count: int = 0
     session_written: bool = False
     needs_clarification: bool = False
+    summary_written: bool = False
+    summary_pending_events: int = 0
 
 
 class PaperQAToolPlan:
@@ -59,6 +64,9 @@ class PaperQAToolPlan:
         session_store: SessionMemoryStore,
         profile_store: UserProfileStore,
         summary_store: SummaryMemoryStore | None = None,
+        episode_store=None,
+        summary_cursor_store: SummaryCursorStore | None = None,
+        summary_window: int = 6,
         graph_query: GraphQuery | None = None,
         orchestrator: ToolOrchestrator | None = None,
     ) -> None:
@@ -66,6 +74,9 @@ class PaperQAToolPlan:
         self.session_store = session_store
         self.profile_store = profile_store
         self.summary_store = summary_store
+        self.episode_store = episode_store
+        self.summary_cursor_store = summary_cursor_store
+        self.summary_window = summary_window
         self.graph_query = graph_query
         self.orchestrator = orchestrator or self._build_orchestrator()
 
@@ -77,7 +88,8 @@ class PaperQAToolPlan:
         paper_id: str | None = None,
         kind: ChunkKind | None = None,
     ) -> PaperQAToolPlanResult:
-        context = ContextGuard().decide(
+        entity_resolver = GraphEntityResolver(self.graph_query.graph) if self.graph_query else None
+        context = ContextGuard(entity_resolver).decide(
             query,
             explicit_paper_id=paper_id,
             session=self.session_store.load(),
@@ -115,6 +127,7 @@ class PaperQAToolPlan:
             ToolCall(
                 call_id="session",
                 tool_name="update_session",
+                depends_on=("retrieve",),
                 args={
                     "query": query,
                     "paper_id": effective_paper_id,
@@ -129,6 +142,26 @@ class PaperQAToolPlan:
             by_id.get("memory_recall").output if by_id.get("memory_recall") else []
         )
         session_result = by_id.get("session")
+        compression = None
+        if (
+            session_result
+            and session_result.status == ToolStatus.SUCCESS
+            and self.episode_store is not None
+            and self.summary_store is not None
+            and self.summary_cursor_store is not None
+        ):
+            self.episode_store.log(
+                "paper_qa_tool_plan",
+                f"Processed paper QA query: {query}",
+                {"paper_id": effective_paper_id, "query": query},
+            )
+            compression = compress_episode_memory(
+                self.episode_store,
+                self.summary_store,
+                self.summary_cursor_store,
+                window_size=self.summary_window,
+                metadata={"source": "paper_qa_tool_plan"},
+            )
         return PaperQAToolPlanResult(
             query=query,
             context=context,
@@ -137,6 +170,8 @@ class PaperQAToolPlan:
             graph_candidate_count=len(graph_output or []),
             memory_recall_count=len(recall_output or []),
             session_written=bool(session_result and session_result.status == ToolStatus.SUCCESS),
+            summary_written=bool(compression and compression.written),
+            summary_pending_events=(compression.pending_events if compression else 0),
         )
 
     def _build_orchestrator(self) -> ToolOrchestrator:
@@ -147,6 +182,7 @@ class PaperQAToolPlan:
                     handler=self._retrieve_chunks,
                     resources=frozenset({"paper_index"}),
                     access=ResourceAccess.READ,
+                    max_retries=1,
                     description="Search paper chunks with the configured retriever.",
                 ),
                 ToolSpec(
@@ -161,6 +197,7 @@ class PaperQAToolPlan:
                     handler=self._update_session,
                     resources=frozenset({"session_memory"}),
                     access=ResourceAccess.WRITE,
+                    max_retries=1,
                     description="Persist short-term QA task state.",
                 ),
                 ToolSpec(

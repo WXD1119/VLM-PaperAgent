@@ -13,6 +13,10 @@ from paper_agent.memory import (
     SessionMemoryStore,
     UserProfileStore,
     build_memory_summary,
+    compress_episode_memory,
+    SummaryCursorStore,
+    SummaryMemoryStore,
+    load_graph_entity_resolver,
 )
 from paper_agent.retrieval import (
     BM25Index,
@@ -24,6 +28,7 @@ from paper_agent.retrieval import (
     load_chunk_bundles,
 )
 from paper_agent.storage import ChromaVectorStore
+from paper_agent.tools import ResourceAccess, ToolCall, ToolOrchestrator, ToolSpec, ToolStatus
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,6 +113,16 @@ def parse_args() -> argparse.Namespace:
         help="Disable memory-based ambiguity checks and paper context constraints.",
     )
     parser.add_argument(
+        "--graph",
+        default="artifacts/graph",
+        help="Base Paper KG used for query-entity resolution.",
+    )
+    parser.add_argument(
+        "--graph-workspace",
+        default=None,
+        help="Optional graph workspace; its effective graph takes precedence over --graph.",
+    )
+    parser.add_argument(
         "--log-episode",
         action="store_true",
         help="Append an answer_generated event to episodic memory after a successful run.",
@@ -116,6 +131,22 @@ def parse_args() -> argparse.Namespace:
         "--episode-memory",
         default="artifacts/memory/episodes.jsonl",
         help="Path for episodic memory when --log-episode is enabled.",
+    )
+    parser.add_argument(
+        "--summary-memory",
+        default="artifacts/memory/summaries.jsonl",
+        help="Compressed conversation summary memory path.",
+    )
+    parser.add_argument(
+        "--summary-cursor",
+        default="artifacts/memory/summary_cursor.json",
+        help="Summary compression checkpoint path.",
+    )
+    parser.add_argument(
+        "--summary-window",
+        type=int,
+        default=6,
+        help="Number of recent episodic events kept before compression starts.",
     )
     parser.add_argument(
         "--show-memory-policy",
@@ -139,6 +170,39 @@ def build_demo_retriever(args: argparse.Namespace):
         args.reranker_model, device=args.device, local_files_only=args.offline
     )
     return RerankedRetriever(hybrid, reranker, args.candidate_k)
+
+
+def retrieve_with_tool_orchestrator(retriever, query, *, top_k, paper_id, kind):
+    """Run retrieval through the same timeout/retry/conflict boundary as other tools."""
+
+    orchestrator = ToolOrchestrator(
+        [
+            ToolSpec(
+                name="retrieve_chunks",
+                handler=lambda values: retriever.search(
+                    values["query"],
+                    values["top_k"],
+                    paper_id=values.get("paper_id"),
+                    kind=values.get("kind"),
+                ),
+                resources=frozenset({"paper_index"}),
+                access=ResourceAccess.READ,
+                max_retries=1,
+            )
+        ]
+    )
+    result = orchestrator.run_many(
+        [
+            ToolCall(
+                call_id="retrieve",
+                tool_name="retrieve_chunks",
+                args={"query": query, "top_k": top_k, "paper_id": paper_id, "kind": kind},
+            )
+        ]
+    )[0]
+    if result.status != ToolStatus.SUCCESS:
+        raise RuntimeError(f"retrieval tool failed: {result.error}")
+    return result.output, result
 
 
 def build_llm_client(args: argparse.Namespace):
@@ -344,7 +408,11 @@ def main() -> None:
     context_decision = None
     effective_paper_id = args.paper_id
     if not args.no_context_guard:
-        context_decision = ContextGuard().decide(
+        entity_resolver = load_graph_entity_resolver(
+            graph_path=args.graph,
+            workspace_path=args.graph_workspace,
+        )
+        context_decision = ContextGuard(entity_resolver).decide(
             args.query,
             explicit_paper_id=args.paper_id,
             session=session_before,
@@ -358,7 +426,13 @@ def main() -> None:
         effective_paper_id = context_decision.resolved_paper_id
     retriever = build_demo_retriever(args)
     kind = ChunkKind(args.kind) if args.kind else None
-    hits = retriever.search(args.query, args.top_k, paper_id=effective_paper_id, kind=kind)
+    hits, retrieval_tool_result = retrieve_with_tool_orchestrator(
+        retriever,
+        args.query,
+        top_k=args.top_k,
+        paper_id=effective_paper_id,
+        kind=kind,
+    )
     pack = build_evidence_pack(args.query, hits)
     judge = (
         SemanticCitationJudge(RemoteStructuredClient(args.judge_url))
@@ -387,6 +461,7 @@ def main() -> None:
         },
     )
     episode = None
+    compression = None
     if args.log_episode:
         episode = EpisodicMemoryStore(args.episode_memory).log(
             "answer_generated",
@@ -406,6 +481,13 @@ def main() -> None:
                 ),
                 "attempts": attempts,
             },
+        )
+        compression = compress_episode_memory(
+            EpisodicMemoryStore(args.episode_memory),
+            SummaryMemoryStore(args.summary_memory),
+            SummaryCursorStore(args.summary_cursor),
+            window_size=args.summary_window,
+            metadata={"source": "ask.py", "last_query": args.query},
         )
 
     print(render_bundle(bundle, content_chars=args.content_chars))
@@ -435,7 +517,18 @@ def main() -> None:
         print("\n" + render_memory_policy_hint(bundle, semantic_report))
     else:
         print("\n" + render_memory_summary(bundle, semantic_report))
+    if compression is not None:
+        print("\n# Summary memory")
+        print(f"Compression triggered: {compression.written}")
+        print(f"Pending events: {compression.pending_events}")
+        print(f"Overflow events: {compression.overflow_events}")
+        if compression.summary:
+            print(f"Summary ID: {compression.summary.summary_id}")
     print("\n# Run")
+    print(
+        f"tool=retrieve_chunks status={retrieval_tool_result.status.value} "
+        f"attempts={retrieval_tool_result.attempts} elapsed_ms={retrieval_tool_result.elapsed_ms}"
+    )
     print(f"retriever={'RRF' if args.no_rerank else 'RRF+BGE-reranker'}")
     print(f"embedding_model={args.embedding_model}")
     if not args.no_rerank:

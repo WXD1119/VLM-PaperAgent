@@ -227,6 +227,44 @@ def summarize_new_episodes(
     )
 
 
+def compress_episode_memory(
+    episode_store,
+    summary_store: SummaryMemoryStore,
+    cursor_store: SummaryCursorStore,
+    *,
+    window_size: int = 6,
+    metadata: dict[str, Any] | None = None,
+) -> SummaryCompressionResult:
+    """Compress overflow episodes and advance the checkpoint atomically enough for local use.
+
+    No compression happens until pending events exceed ``window_size``. The summary is
+    written to summary memory, while the Paper KG remains untouched.
+    """
+
+    episodes = episode_store.list()
+    cursor = cursor_store.load()
+    result = summarize_new_episodes(
+        episodes,
+        window_size=window_size,
+        cursor=cursor,
+        metadata=metadata,
+    )
+    if result.summary is None:
+        return result
+    summary_store.append(result.summary)
+    pending = _episodes_after_cursor(episodes, cursor.last_summarized_event_id)
+    overflow_count = result.overflow_events
+    summarized_events = pending[:overflow_count]
+    if summarized_events:
+        next_cursor = cursor_store.update(
+            event_id=summarized_events[-1].event_id,
+            summary_id=result.summary.summary_id,
+        )
+    else:
+        next_cursor = cursor
+    return result.model_copy(update={"cursor": next_cursor, "written": True})
+
+
 class TextEmbedder(Protocol):
     def embed(self, text: str) -> list[float]: ...
 

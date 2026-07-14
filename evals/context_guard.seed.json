@@ -22,9 +22,9 @@
     "query": "What training objective does CLIP use to learn image and text representations?",
     "session_current_paper_id": "paper_dc8bace378a282ea",
     "expected_action": "proceed",
-    "expected_resolved_paper_id": null,
+    "expected_resolved_paper_id": "paper_6478b6e571a7d6fc",
     "expected_needs_clarification": false,
-    "notes": "Clear new CLIP question should not be constrained to old LLaVA session."
+    "notes": "Clear CLIP entity should resolve from the graph and override old LLaVA session."
   },
   {
     "case_id": "explicit_paper_overrides_session",
@@ -52,5 +52,14 @@
     "expected_resolved_paper_id": null,
     "expected_needs_clarification": true,
     "notes": "Very short continuation without context should ask clarification."
+  },
+  {
+    "case_id": "qformer_entity_overrides_llava_session",
+    "query": "How does Q-Former bridge the frozen image encoder and frozen language model?",
+    "session_current_paper_id": "paper_dc8bace378a282ea",
+    "expected_action": "proceed",
+    "expected_resolved_paper_id": "paper_6bc5d399d6127a64",
+    "expected_needs_clarification": false,
+    "notes": "Explicit Q-Former entity should override stale LLaVA session context."
   }
 ]

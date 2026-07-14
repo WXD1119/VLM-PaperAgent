@@ -31,6 +31,8 @@ class ToolSpec:
     resources: frozenset[str] = field(default_factory=frozenset)
     access: ResourceAccess = ResourceAccess.READ
     description: str = ""
+    max_retries: int = 0
+    retry_backoff_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class ToolCall:
     call_id: str
     tool_name: str
     args: Mapping[str, Any] = field(default_factory=dict)
+    depends_on: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,7 @@ class ToolResult:
     output: Any = None
     error: str | None = None
     elapsed_ms: int = 0
+    attempts: int = 0
 
 
 class ToolOrchestrator:
@@ -67,6 +71,10 @@ class ToolOrchestrator:
             raise ValueError(f"tool already registered: {tool.name}")
         if tool.timeout_s <= 0:
             raise ValueError("tool timeout must be positive")
+        if tool.max_retries < 0:
+            raise ValueError("tool max_retries cannot be negative")
+        if tool.retry_backoff_s < 0:
+            raise ValueError("tool retry_backoff_s cannot be negative")
         self._tools[tool.name] = tool
 
     def plan_batches(self, calls: list[ToolCall]) -> list[list[ToolCall]]:
@@ -88,9 +96,31 @@ class ToolOrchestrator:
 
     def run_many(self, calls: list[ToolCall]) -> list[ToolResult]:
         results: list[ToolResult] = []
-        for batch in self.plan_batches(calls):
-            results.extend(self._run_batch(batch))
-        return results
+        pending = list(calls)
+        completed: set[str] = set()
+        while pending:
+            ready = [call for call in pending if set(call.depends_on) <= completed]
+            if not ready:
+                results.extend(
+                    ToolResult(
+                        call_id=call.call_id,
+                        tool_name=call.tool_name,
+                        status=ToolStatus.ERROR,
+                        error=f"unresolved tool dependencies: {', '.join(call.depends_on)}",
+                    )
+                    for call in pending
+                )
+                break
+            batch = self._first_ready_batch(ready)
+            batch_results = self._run_batch(batch)
+            results.extend(batch_results)
+            completed.update(result.call_id for result in batch_results)
+            pending = [call for call in pending if call.call_id not in completed]
+        return [next(result for result in results if result.call_id == call.call_id) for call in calls]
+
+    def _first_ready_batch(self, calls: list[ToolCall]) -> list[ToolCall]:
+        batches = self.plan_batches(calls)
+        return batches[0] if batches else []
 
     def _run_batch(self, calls: list[ToolCall]) -> list[ToolResult]:
         if not calls:
@@ -110,14 +140,15 @@ class ToolOrchestrator:
                 executable.append((call, spec))
 
         if executable:
-            with ThreadPoolExecutor(max_workers=len(executable)) as executor:
+            executor = ThreadPoolExecutor(max_workers=len(executable))
+            try:
                 future_by_call = {
-                    executor.submit(spec.handler, call.args): (call, spec, monotonic())
+                    executor.submit(self._execute_with_retries, call, spec): (call, spec, monotonic())
                     for call, spec in executable
                 }
                 for future, (call, spec, started_at) in future_by_call.items():
                     try:
-                        output = future.result(timeout=spec.timeout_s)
+                        output, attempts = future.result(timeout=spec.timeout_s * (spec.max_retries + 1))
                         status = ToolStatus.SUCCESS
                         error = None
                     except TimeoutError:
@@ -125,10 +156,12 @@ class ToolOrchestrator:
                         output = None
                         status = ToolStatus.TIMEOUT
                         error = f"tool timed out after {spec.timeout_s:.3f}s"
+                        attempts = spec.max_retries + 1
                     except Exception as exc:  # tool boundary: isolate individual failures
                         output = None
                         status = ToolStatus.ERROR
                         error = str(exc)
+                        attempts = spec.max_retries + 1
                     results_by_id[call.call_id] = ToolResult(
                         call_id=call.call_id,
                         tool_name=call.tool_name,
@@ -136,9 +169,27 @@ class ToolOrchestrator:
                         output=output,
                         error=error,
                         elapsed_ms=int((monotonic() - started_at) * 1000),
+                        attempts=attempts,
                     )
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
 
         return [results_by_id[call.call_id] for call in calls]
+
+    @staticmethod
+    def _execute_with_retries(call: ToolCall, spec: ToolSpec) -> tuple[Any, int]:
+        import time
+
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                return spec.handler(call.args), attempts
+            except Exception:
+                if attempts > spec.max_retries:
+                    raise
+                if spec.retry_backoff_s:
+                    time.sleep(spec.retry_backoff_s * (2 ** (attempts - 1)))
 
     def _conflicts(self, left: ToolSpec | None, right: ToolSpec | None) -> bool:
         if left is None or right is None:

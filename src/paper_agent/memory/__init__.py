@@ -2,6 +2,14 @@
 
 from .artifacts import AnswerArtifactSummary, list_answer_artifacts, load_answer_artifact
 from .context import ContextGuard, ContextGuardAction, ContextGuardDecision
+from .entity_resolution import (
+    EntityResolution,
+    EntityResolutionStatus,
+    EntityResolver,
+    GraphEntityResolver,
+    PaperEntityCandidate,
+    load_graph_entity_resolver,
+)
 from .episodic import Episode, EpisodicMemoryStore
 from .policy import (
     MemoryAction,
@@ -32,6 +40,7 @@ from .summary import (
     SummaryMemoryStore,
     SummarySearchHit,
     build_summary_vector_store,
+    compress_episode_memory,
     summarize_new_episodes,
 )
 
@@ -40,6 +49,12 @@ __all__ = [
     "ContextGuard",
     "ContextGuardAction",
     "ContextGuardDecision",
+    "EntityResolution",
+    "EntityResolutionStatus",
+    "EntityResolver",
+    "GraphEntityResolver",
+    "PaperEntityCandidate",
+    "load_graph_entity_resolver",
     "ConversationSummary",
     "ConversationTurn",
     "Episode",
@@ -70,6 +85,7 @@ __all__ = [
     "UserProfileStore",
     "build_memory_summary",
     "build_summary_vector_store",
+    "compress_episode_memory",
     "summarize_new_episodes",
     "list_answer_artifacts",
     "load_answer_artifact",

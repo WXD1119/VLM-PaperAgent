@@ -14,6 +14,7 @@ from paper_agent.memory import (
     SessionMemoryStore,
     UserProfileStore,
     build_memory_summary,
+    load_graph_entity_resolver,
 )
 from paper_agent.retrieval import (
     BM25Index,
@@ -90,18 +91,22 @@ class LazyPaperQAService:
             "PAPER_AGENT_PROFILE_MEMORY",
             "artifacts/memory/user_profile.json",
         )
+        self.graph_path = os.getenv("PAPER_AGENT_GRAPH", "artifacts/graph")
+        self.graph_workspace_path = os.getenv("PAPER_AGENT_GRAPH_WORKSPACE") or None
 
         self._sparse = None
         self._dense = None
         self._reranker = None
         self._client = None
         self._judge = None
+        self._entity_resolver = None
+        self._entity_resolver_loaded = False
 
     def ask(self, request: AskRequest) -> AskResponse:
         context_decision = None
         effective_paper_id = request.paper_id
         if request.use_context_guard:
-            context_decision = ContextGuard().decide(
+            context_decision = ContextGuard(self._context_entity_resolver()).decide(
                 request.query,
                 explicit_paper_id=request.paper_id,
                 session=SessionMemoryStore(self.session_memory_path).load(),
@@ -139,6 +144,15 @@ class LazyPaperQAService:
             memory=build_memory_summary(bundle, semantic_report),
             context=context_decision,
         )
+
+    def _context_entity_resolver(self):
+        if not self._entity_resolver_loaded:
+            self._entity_resolver = load_graph_entity_resolver(
+                graph_path=self.graph_path,
+                workspace_path=self.graph_workspace_path,
+            )
+            self._entity_resolver_loaded = True
+        return self._entity_resolver
 
     @staticmethod
     def _clarification_response(

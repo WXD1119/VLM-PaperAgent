@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from .profile import UserProfile
 from .session import SessionState
+from .entity_resolution import EntityResolver, EntityResolutionStatus
 
 
 class ContextGuardAction(StrEnum):
@@ -18,6 +19,7 @@ class ContextGuardDecision(BaseModel):
     resolved_paper_id: str | None = None
     needs_clarification: bool = False
     clarification_question: str | None = None
+    candidate_paper_ids: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     context_notes: list[str] = Field(default_factory=list)
 
@@ -55,6 +57,9 @@ class ContextGuard:
         "继续",
     }
 
+    def __init__(self, entity_resolver: EntityResolver | None = None) -> None:
+        self.entity_resolver = entity_resolver
+
     def decide(
         self,
         query: str,
@@ -79,6 +84,47 @@ class ContextGuard:
                 action=ContextGuardAction.PROCEED,
                 query=normalized_query,
                 resolved_paper_id=explicit_paper_id,
+                context_notes=notes,
+            )
+
+        entity_resolution = (
+            self.entity_resolver.resolve(normalized_query) if self.entity_resolver else None
+        )
+        if entity_resolution and entity_resolution.status == EntityResolutionStatus.AMBIGUOUS:
+            candidates = entity_resolution.candidates
+            labels = "; ".join(
+                f"{candidate.title} ({candidate.paper_id})" for candidate in candidates[:5]
+            )
+            return ContextGuardDecision(
+                action=ContextGuardAction.ASK_CLARIFICATION,
+                query=normalized_query,
+                needs_clarification=True,
+                clarification_question=(
+                    f"The concept '{entity_resolution.matched_entity or 'named entity'}' appears "
+                    f"in multiple papers. Which one do you mean: {labels}?"
+                ),
+                candidate_paper_ids=[candidate.paper_id for candidate in candidates],
+                warnings=[entity_resolution.reason],
+                context_notes=notes,
+            )
+
+        entity_paper_id = (
+            entity_resolution.resolved_paper_id
+            if entity_resolution
+            and entity_resolution.status == EntityResolutionStatus.RESOLVED
+            else None
+        )
+        if entity_paper_id:
+            notes.append("resolved paper_id from explicit query entity")
+            if session.current_paper_id and session.current_paper_id != entity_paper_id:
+                warnings.append(
+                    "query entity overrides stale current_paper_id from session memory"
+                )
+            return ContextGuardDecision(
+                action=ContextGuardAction.PROCEED,
+                query=normalized_query,
+                resolved_paper_id=entity_paper_id,
+                warnings=warnings,
                 context_notes=notes,
             )
 
