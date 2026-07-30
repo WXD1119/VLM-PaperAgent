@@ -14,7 +14,7 @@ class EmbeddingEncoder(Protocol):
 
 
 class SentenceTransformerEncoder:
-    """Lazy Sentence Transformers encoder with normalized dense vectors."""
+    """按需加载并输出归一化稠密向量的 Sentence Transformers 编码器。"""
 
     def __init__(
         self,
@@ -55,7 +55,7 @@ class SentenceTransformerEncoder:
         return self._encode(texts)
 
     def encode_queries(self, texts: list[str]) -> list[list[float]]:
-        # BGE-M3 does not require a query instruction prefix.
+        # BGE-M3 不需要额外的查询指令前缀。
         return self._encode(texts)
 
     def _encode(self, texts: list[str]) -> list[list[float]]:

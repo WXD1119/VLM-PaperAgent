@@ -51,10 +51,10 @@ class PaperQAToolPlanResult(BaseModel):
 
 
 class PaperQAToolPlan:
-    """Tool-backed pre-answer plan for paper QA.
+    """论文问答的工具化回答前计划。
 
-    This plan intentionally stops before LLM answer generation. It demonstrates real
-    tool usage in the QA path while keeping tests fast and deterministic.
+    该计划刻意停在 LLM 生成前，用于展示问答路径中的真实工具调用，
+    同时保持测试快速且确定。
     """
 
     def __init__(

@@ -1,1 +1,1 @@
-"""Importable CLI helpers for tests."""
+"""供测试导入的命令行辅助模块。"""

@@ -14,7 +14,7 @@ class Reranker(Protocol):
 
 
 class CrossEncoderReranker:
-    """Sentence Transformers cross-encoder adapter with offline model support."""
+    """支持离线模型的 Sentence Transformers 交叉编码器适配器。"""
 
     def __init__(
         self,
@@ -71,7 +71,7 @@ class RerankedHit(BaseModel):
 
 
 class RerankedRetriever:
-    """Retrieve candidates first, then reorder them with a cross encoder."""
+    """先召回候选，再用交叉编码器重排序。"""
 
     def __init__(
         self,

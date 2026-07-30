@@ -18,7 +18,7 @@ class ConceptNeighborhood:
 
 
 class GraphQuery:
-    """Small in-memory query helper for the lightweight evidence graph."""
+    """轻量证据图谱的小型内存查询辅助器。"""
 
     def __init__(self, graph: GraphDocument) -> None:
         self.graph = graph
@@ -92,7 +92,7 @@ class GraphQuery:
         return sorted(matches, key=lambda node: (node.node_type.value, node.node_id))[:limit]
 
     def concept_candidates(self, keyword: str, limit: int = 10) -> list[GraphNode]:
-        """Return possible concept nodes for a keyword without forcing disambiguation."""
+        """返回关键词可能对应的概念节点，不强制进行消歧。"""
 
         normalized = normalize_concept(keyword)
         exact_id = f"concept:{normalized}"

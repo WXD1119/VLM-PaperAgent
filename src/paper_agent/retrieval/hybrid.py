@@ -30,7 +30,7 @@ class HybridHit(BaseModel):
 
 
 class HybridRetriever:
-    """Fuse sparse and dense rankings with Reciprocal Rank Fusion."""
+    """使用倒数排名融合稀疏与稠密排序。"""
 
     def __init__(
         self,

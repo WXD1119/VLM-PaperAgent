@@ -15,7 +15,7 @@ def make_query_id(query: str, paper_id: str | None = None) -> str:
 
 
 def parse_selection(value: str, candidate_count: int) -> list[int]:
-    """Parse one-based comma/range selection, e.g. 1,3-5."""
+    """解析从 1 开始的逗号/范围选择，例如 1,3-5。"""
     selected: set[int] = set()
     for part in value.replace(" ", "").split(","):
         if not part:

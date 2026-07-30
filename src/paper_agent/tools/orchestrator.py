@@ -33,6 +33,9 @@ class ToolSpec:
     description: str = ""
     max_retries: int = 0
     retry_backoff_s: float = 0.0
+    input_schema: str = "object"
+    output_schema: str = "object"
+    required_scopes: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)
@@ -55,10 +58,9 @@ class ToolResult:
 
 
 class ToolOrchestrator:
-    """Run registered tools with timeout and simple resource-conflict scheduling.
+    """按超时和简单资源冲突规则运行已注册工具。
 
-    Conflict policy: read/read calls can share a batch, but any write touching the same
-    resource is serialized away from other read/write calls on that resource.
+    冲突规则：读/读调用可并行；任何写入同一资源的调用都会与该资源的其他读写调用串行。
     """
 
     def __init__(self, tools: list[ToolSpec] | None = None) -> None:
@@ -157,7 +159,7 @@ class ToolOrchestrator:
                         status = ToolStatus.TIMEOUT
                         error = f"tool timed out after {spec.timeout_s:.3f}s"
                         attempts = spec.max_retries + 1
-                    except Exception as exc:  # tool boundary: isolate individual failures
+                    except Exception as exc:  # 工具边界：隔离单个工具失败
                         output = None
                         status = ToolStatus.ERROR
                         error = str(exc)

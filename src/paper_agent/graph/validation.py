@@ -13,7 +13,7 @@ class GraphValidationReport(BaseModel):
 
 
 class GraphValidator:
-    """Validate graph invariants that make evidence traceability auditable."""
+    """校验证据可追溯图谱所需的可审计不变量。"""
 
     def validate(self, graph: GraphDocument) -> GraphValidationReport:
         errors: list[str] = []

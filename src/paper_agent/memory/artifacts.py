@@ -6,7 +6,7 @@ from paper_agent.domain import AnswerBundle
 
 
 class AnswerArtifactSummary(BaseModel):
-    """Compact index record for an immutable answer artifact."""
+    """不可变回答工件的紧凑索引记录。"""
 
     path: str
     query: str

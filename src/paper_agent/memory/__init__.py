@@ -1,6 +1,13 @@
-"""Agent memory stores that are separate from the paper knowledge graph."""
+"""与论文知识图谱严格分离的 Agent 记忆存储。"""
 
 from .artifacts import AnswerArtifactSummary, list_answer_artifacts, load_answer_artifact
+from .backends import (
+    MySQLEpisodicMemoryStore,
+    MySQLLongTermMemoryStore,
+    MySQLUserProfileStore,
+    RedisConversationWindowStore,
+    RedisSessionMemoryStore,
+)
 from .context import ContextGuard, ContextGuardAction, ContextGuardDecision
 from .entity_resolution import (
     EntityResolution,
@@ -63,6 +70,9 @@ __all__ = [
     "HeuristicConversationSummarizer",
     "InMemorySummaryVectorStore",
     "MemoryAction",
+    "MySQLLongTermMemoryStore",
+    "MySQLEpisodicMemoryStore",
+    "MySQLUserProfileStore",
     "MemoryCandidate",
     "MemoryCandidateKind",
     "MemoryDecision",
@@ -73,6 +83,8 @@ __all__ = [
     "PromotionPolicy",
     "PromotionVerdict",
     "SessionMemoryStore",
+    "RedisConversationWindowStore",
+    "RedisSessionMemoryStore",
     "SessionState",
     "SlidingWindowMemory",
     "SlidingWindowResult",

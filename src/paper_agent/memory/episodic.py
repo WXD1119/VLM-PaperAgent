@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 class Episode(BaseModel):
-    """Append-only event memory for what happened during agent use."""
+    """记录 Agent 使用过程的追加式事件记忆。"""
 
     event_id: str = Field(default_factory=lambda: f"evt_{uuid4().hex[:16]}")
     timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())

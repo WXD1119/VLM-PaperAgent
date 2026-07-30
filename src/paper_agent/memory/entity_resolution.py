@@ -106,9 +106,8 @@ class GraphEntityResolver:
         if not concept_matches:
             return EntityResolution(status=EntityResolutionStatus.NO_MATCH)
 
-        # Prefer the concept occurring in the fewest papers. This prevents generic
-        # terms such as "language model" from overpowering a named entity such as
-        # "Q-Former" when both appear in the same question.
+        # 优先选择出现在最少论文中的概念，避免“language model”等泛化词在同一问题中
+        # 压过 “Q-Former” 这类命名实体。
         minimum_document_frequency = min(len(mentions) for _, mentions in concept_matches)
         selected_matches = [
             item for item in concept_matches if len(item[1]) == minimum_document_frequency

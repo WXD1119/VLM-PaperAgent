@@ -7,7 +7,7 @@ from paper_agent.retrieval.embedding import EmbeddingEncoder
 
 
 class ChromaVectorStore:
-    """Persistent Chroma adapter using caller-computed embeddings."""
+    """使用调用方计算向量的持久化 Chroma 适配器。"""
 
     def __init__(
         self,

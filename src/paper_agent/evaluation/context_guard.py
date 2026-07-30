@@ -98,8 +98,8 @@ def evaluate_context_guard(
         if result.predicted_action == ContextGuardAction.ASK_CLARIFICATION
         and result.predicted_needs_clarification
     ]
-    # Wrong-constraint rate measures stale-session over-binding for clear new questions.
-    # Cases with explicit paper_id are excluded because a resolved paper is intended.
+    # 错误约束率衡量陈旧会话对明确新问题的过度绑定。
+    # 显式给出 paper_id 的案例被排除，因为该场景本就要求解析出指定论文。
     clear_new_questions = [
         result
         for result in results

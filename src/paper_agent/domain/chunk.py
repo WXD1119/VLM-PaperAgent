@@ -38,6 +38,22 @@ class RetrievalChunk(BaseModel):
         parts = [f"Section: {section}" if section else "", self.context, self.content]
         return "\n\n".join(part for part in parts if part)
 
+# property：是 Python 的一个装饰器，用来把一个方法变成“像属性一样访问的只读计算值”。调用时不需要写括号：text = chunk.embedding_text，而非：text = chunk.embedding_text()
+# section：例如3 Experiments > 3.1 Dataset，章节路径
+# parts = [
+#     f"Section: {section}" if section else "",
+#     self.context,
+#     self.content,
+# ]    parts是章节路径和内容拼接
+# 最后return：过滤掉空字符串，并用两个换行符连接非空内容。得到：
+    # Section: 3 Experiments > 3.1 Dataset
+
+    # The following experiment uses...
+
+    # We evaluate the model on three datasets.
+
+
+
 
 class ChunkBundle(BaseModel):
     paper_id: str

@@ -153,8 +153,7 @@ def _is_useful_label(label: str) -> bool:
 
 def _looks_like_person_name(label: str) -> bool:
     if "-" in label and not any(keyword in label.lower() for keyword in _TECH_KEYWORDS):
-        # Keeps technical hyphenated terms such as cross-attention and zero-shot, while
-        # filtering citation names such as Ben-Hamu.
+        # 保留 cross-attention、zero-shot 等技术连字符术语，同时过滤 Ben-Hamu 等引文人名。
         parts = label.split("-")
         return len(parts) == 2 and all(part[:1].isupper() for part in parts if part)
     words = label.split()

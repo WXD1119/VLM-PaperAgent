@@ -1,21 +1,39 @@
+import json
 import os
+import queue
+import threading
 from pathlib import Path
-from typing import Protocol
+from collections.abc import Callable, Iterator
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
 from paper_agent.agents import AnswerAgent, CitationValidator, SemanticCitationJudge, build_evidence_pack
-from paper_agent.domain import AnswerBundle, ChunkKind, EvidencePack, GroundedAnswer, SemanticCitationReport
+from paper_agent.domain import (
+    AnswerBundle,
+    ChunkBundle,
+    ChunkKind,
+    EvidencePack,
+    GroundedAnswer,
+    Paper,
+    SemanticCitationReport,
+)
 from paper_agent.llm import OpenAICompatibleClient, RemoteStructuredClient, TransformersStructuredClient
 from paper_agent.memory import (
     ContextGuard,
     ContextGuardDecision,
+    ConversationTurn,
     MemorySummary,
+    MySQLLongTermMemoryStore,
+    MySQLUserProfileStore,
+    RedisConversationWindowStore,
+    RedisSessionMemoryStore,
     SessionMemoryStore,
     UserProfileStore,
     build_memory_summary,
     load_graph_entity_resolver,
 )
+from paper_agent.ingestion import IngestionTask, LocalIngestionTaskStore
 from paper_agent.retrieval import (
     BM25Index,
     CrossEncoderReranker,
@@ -25,13 +43,39 @@ from paper_agent.retrieval import (
     chunks_from_bundles,
     load_chunk_bundles,
 )
-from paper_agent.storage import ChromaVectorStore
+from paper_agent.storage import ChromaVectorStore, StorageHealthReport, check_storage_health
+from paper_agent.graph import (
+    GraphQuery,
+    GraphValidator,
+    LocalGraphWorkspaceStore,
+    build_paper_fragment,
+    delta_from_fragment,
+    read_graph_jsonl,
+)
+from paper_agent.runtime import ResearchGraphRun, ResearchGraphServices, build_research_graph
+from paper_agent.security import ActorContext, validate_query
+from paper_agent.observability import JsonlTraceStore, TraceRecord, TraceRecorder
+from paper_agent.planning import (
+    DeterministicResearchPlanner,
+    LocalResearchPlanStore,
+    MySQLResearchPlanStore,
+    PaperQAResult,
+    ResearchPlan,
+    ResearchPlanExecutor,
+    ResearchPlanStore,
+)
+from paper_agent.tools import AuthorizedToolGateway, ToolRuntimePolicy
 
 try:
-    from fastapi import FastAPI, HTTPException
-except ImportError:  # optional dependency
+    from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+    from fastapi.responses import StreamingResponse
+except ImportError:  # 可选依赖
     FastAPI = None  # type: ignore[assignment,misc]
+    File = None  # type: ignore[assignment,misc]
+    Header = None  # type: ignore[assignment,misc]
     HTTPException = None  # type: ignore[assignment,misc]
+    UploadFile = None  # type: ignore[assignment,misc]
+    StreamingResponse = None  # type: ignore[assignment,misc]
 
 
 class AskRequest(BaseModel):
@@ -43,6 +87,9 @@ class AskRequest(BaseModel):
     use_rerank: bool = True
     max_answer_attempts: int = Field(default=2, ge=1, le=5)
     use_context_guard: bool = True
+    # 仅由可信 API 边界写入，不能由请求体作为授权依据。
+    user_id: str = Field(default="local-user", exclude=True)
+    session_id: str = Field(default="local-session", exclude=True)
 
 
 class AskResponse(BaseModel):
@@ -53,14 +100,208 @@ class AskResponse(BaseModel):
     attempts: int = 1
     memory: MemorySummary | None = None
     context: ContextGuardDecision | None = None
+    runtime: str = "langgraph"
+    trace_id: str | None = None
+    rewrite_count: int = 0
+    refusal_kind: str | None = None
+    route_intent: str | None = None
+    route_confidence: float | None = None
+    retrieval_policy: dict[str, object] = Field(default_factory=dict)
+
+
+class PaperSummary(BaseModel):
+    paper_id: str
+    title: str
+
+
+class GraphConceptResponse(BaseModel):
+    query: str
+    resolved_concept: str | None = None
+    requires_disambiguation: bool = False
+    candidates: list[str] = Field(default_factory=list)
+    papers: list[PaperSummary] = Field(default_factory=list)
+    sections: list[str] = Field(default_factory=list)
+    chunks: list[dict[str, object]] = Field(default_factory=list)
+    related_concepts: list[str] = Field(default_factory=list)
+
+
+class WorkspacePromotionResponse(BaseModel):
+    task_id: str
+    workspace_path: str
+    commit_id: str | None = None
+    added_nodes: int
+    added_edges: int
+    valid_after_commit: bool
+    status: str
+
+
+class ResearchPlanCreateRequest(BaseModel):
+    """创建调研草案的请求；论文范围必须由用户显式确认。"""
+
+    goal: str = Field(min_length=1, max_length=2000)
+    paper_ids: list[str] = Field(min_length=2, max_length=12)
+
+
+class ResearchPlanExecuteRequest(BaseModel):
+    """执行草案前的显式确认，防止复杂任务静默消耗推理资源。"""
+
+    confirm: bool = False
 
 
 class PaperQAService(Protocol):
     def ask(self, request: AskRequest) -> AskResponse: ...
 
 
+@runtime_checkable
+class ProgressPaperQAService(PaperQAService, Protocol):
+    """支持受控进度事件的问答服务契约。"""
+
+    def ask_with_progress(
+        self,
+        request: AskRequest,
+        on_event: Callable[[dict[str, object]], None],
+    ) -> AskResponse: ...
+
+
+@runtime_checkable
+class TraceReadService(Protocol):
+    def list_traces(self, *, user_id: str, limit: int = 50) -> list[TraceRecord]: ...
+
+    def load_trace(self, trace_id: str, *, user_id: str) -> TraceRecord: ...
+
+
+class GraphReadService(Protocol):
+    def papers(self) -> list[PaperSummary]: ...
+
+    def concept(self, query: str, limit: int) -> GraphConceptResponse: ...
+
+
+class IngestionService(Protocol):
+    def create(self, filename: str, content: bytes) -> IngestionTask: ...
+
+    def list(self, limit: int = 20) -> list[IngestionTask]: ...
+
+    def load(self, task_id: str) -> IngestionTask: ...
+
+    def retry(self, task_id: str) -> IngestionTask: ...
+
+    def mark_promoted(
+        self,
+        task_id: str,
+        *,
+        workspace_path: str,
+        commit_id: str | None,
+        message: str,
+    ) -> IngestionTask: ...
+
+
+class ApiResearchPlanService:
+    """将受限计划执行器适配到已有论文问答服务，不直接暴露任意工具调用。"""
+
+    def __init__(self, store: ResearchPlanStore, qa_service: PaperQAService, graph_reader: GraphReadService) -> None:
+        self.store = store
+        self.qa_service = qa_service
+        self.graph_reader = graph_reader
+        self.planner = DeterministicResearchPlanner()
+
+    def create(self, *, user_id: str, goal: str, paper_ids: list[str]) -> ResearchPlan:
+        normalized = list(dict.fromkeys(item.strip() for item in paper_ids if item.strip()))
+        available = {paper.paper_id for paper in self.graph_reader.papers()}
+        unknown = sorted(set(normalized) - available)
+        if unknown:
+            raise ValueError(f"不在当前论文图谱中的 paper_id: {', '.join(unknown)}")
+        return self.store.create(
+            self.planner.create_comparison_plan(user_id=user_id, goal=goal, paper_ids=normalized)
+        )
+
+    def list(self, *, user_id: str, limit: int) -> list[ResearchPlan]:
+        return self.store.list(user_id, limit)
+
+    def load(self, *, user_id: str, plan_id: str) -> ResearchPlan:
+        return self.store.load(user_id, plan_id)
+
+    def execute(self, *, user_id: str, session_id: str, plan_id: str, confirmed: bool) -> ResearchPlan:
+        def ask_paper(question: str, paper_id: str) -> PaperQAResult:
+            response = self.qa_service.ask(
+                AskRequest(
+                    query=question,
+                    paper_id=paper_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    top_k=5,
+                )
+            )
+            return PaperQAResult(
+                answer=response.bundle.answer.answer,
+                evidence_chunk_ids=[item.chunk_id for item in response.bundle.evidence_pack.items],
+                trace_id=response.trace_id,
+                citation_valid=response.bundle.citation_validation.valid,
+                abstained=response.bundle.answer.abstained,
+            )
+
+        return ResearchPlanExecutor(self.store, ask_paper).execute(
+            user_id=user_id,
+            plan_id=plan_id,
+            confirmed=confirmed,
+        )
+
+
+class LocalGraphReadService:
+    """JSONL Paper KG 或有效 workspace 图谱的只读适配器。"""
+
+    def __init__(
+        self,
+        graph_path: str | Path = "artifacts/graph",
+        workspace_path: str | Path | None = None,
+    ) -> None:
+        self.graph_path = Path(graph_path)
+        self.workspace_path = Path(workspace_path) if workspace_path else None
+
+    def papers(self) -> list[PaperSummary]:
+        return [
+            PaperSummary(
+                paper_id=str(node.properties.get("paper_id", node.node_id.removeprefix("paper:"))),
+                title=node.label,
+            )
+            for node in GraphQuery(self._graph()).papers()
+        ]
+
+    def concept(self, query: str, limit: int) -> GraphConceptResponse:
+        neighborhood = GraphQuery(self._graph()).concept_neighborhood(query, limit=limit)
+        return GraphConceptResponse(
+            query=query,
+            resolved_concept=neighborhood.concept.label if neighborhood.concept else None,
+            requires_disambiguation=neighborhood.concept is None and bool(neighborhood.candidates),
+            candidates=[node.label for node in neighborhood.candidates],
+            papers=[
+                PaperSummary(
+                    paper_id=str(node.properties.get("paper_id", node.node_id.removeprefix("paper:"))),
+                    title=node.label,
+                )
+                for node in neighborhood.papers
+            ],
+            sections=[node.label for node in neighborhood.sections],
+            chunks=[
+                {
+                    "chunk_id": str(node.properties.get("chunk_id", node.node_id)),
+                    "paper_id": str(node.properties.get("paper_id", "")),
+                    "pages": node.properties.get("pages", []),
+                    "section": node.properties.get("section_path", []),
+                    "preview": str(node.properties.get("content_preview", node.label)),
+                }
+                for node in neighborhood.chunks
+            ],
+            related_concepts=[node.label for node in neighborhood.related_concepts],
+        )
+
+    def _graph(self):
+        if self.workspace_path is not None:
+            return LocalGraphWorkspaceStore(self.workspace_path).load_effective_graph()
+        return read_graph_jsonl(self.graph_path)
+
+
 class LazyPaperQAService:
-    """Lazy service wrapper around retrieval, generation, and optional semantic gate."""
+    """检索、生成与可选语义门控的延迟初始化服务封装。"""
 
     def __init__(self) -> None:
         self.chunks_path = os.getenv("PAPER_AGENT_CHUNKS", "artifacts/papers")
@@ -93,6 +334,10 @@ class LazyPaperQAService:
         )
         self.graph_path = os.getenv("PAPER_AGENT_GRAPH", "artifacts/graph")
         self.graph_workspace_path = os.getenv("PAPER_AGENT_GRAPH_WORKSPACE") or None
+        self.memory_backend = os.getenv("PAPER_AGENT_MEMORY_BACKEND", "file")
+        self.redis_url = os.getenv("REDIS_URL")
+        self.mysql_url = os.getenv("MYSQL_URL")
+        self.trace_store = JsonlTraceStore(os.getenv("PAPER_AGENT_TRACE_PATH", "artifacts/traces/traces.jsonl"))
 
         self._sparse = None
         self._dense = None
@@ -101,16 +346,211 @@ class LazyPaperQAService:
         self._judge = None
         self._entity_resolver = None
         self._entity_resolver_loaded = False
+        self._mysql_memory = None
+        self.runtime = os.getenv("PAPER_AGENT_RUNTIME", "langgraph")
 
     def ask(self, request: AskRequest) -> AskResponse:
+        return self._ask(request)
+
+    def ask_with_progress(
+        self,
+        request: AskRequest,
+        on_event: Callable[[dict[str, object]], None],
+    ) -> AskResponse:
+        """执行问答并发送可展示的节点状态，不暴露模型原始推理。"""
+
+        return self._ask(request, on_event=on_event)
+
+    def _ask(
+        self,
+        request: AskRequest,
+        *,
+        on_event: Callable[[dict[str, object]], None] | None = None,
+    ) -> AskResponse:
+        validate_query(request.query)
+        recorder = TraceRecorder(
+            query=request.query,
+            runtime=self.runtime,
+            user_id=request.user_id,
+            session_id=request.session_id,
+            event_listener=(
+                lambda event: on_event({"type": "node", **event.model_dump()})
+                if on_event
+                else None
+            ),
+        )
+        memory_warnings: list[str] = []
+        try:
+            if self.runtime == "legacy":
+                response = recorder.run("legacy_workflow", lambda: self._ask_legacy(request))
+            else:
+                response = self._ask_langgraph(request, recorder, memory_warnings)
+            try:
+                recorder.run("persist_memory", lambda: self._persist_conversation(request, response))
+            except Exception as exc:
+                # 记忆服务不可用时保留问答结果，并将降级原因写进 Trace 与响应。
+                warning = f"memory persistence degraded: {type(exc).__name__}"
+                memory_warnings.append(warning)
+                recorder.record_event("memory_degraded", status="degraded", elapsed_ms=0, attributes={"reason": warning})
+            if memory_warnings:
+                response = response.model_copy(
+                    update={
+                        "memory": MemorySummary(
+                            status="answer returned; distributed memory degraded to file/no-write mode",
+                            recommendation="inspect trace and restore Redis/MySQL before relying on conversation memory",
+                        )
+                    }
+                )
+            trace = recorder.complete(
+                status="success",
+                attributes={
+                    "citation_valid": response.bundle.citation_validation.valid,
+                    "semantic_gate_passed": response.semantic_gate_passed,
+                    "attempts": response.attempts,
+                    "rewrite_count": response.rewrite_count,
+                    "refusal_kind": response.refusal_kind,
+                    "evidence_count": len(response.bundle.evidence_pack.items),
+                    "abstained": response.bundle.answer.abstained,
+                    "intent": response.route_intent,
+                    "route_confidence": response.route_confidence,
+                    "retrieval_policy": response.retrieval_policy,
+                },
+            )
+            if on_event:
+                on_event({"type": "completed", "trace_id": trace.trace_id, "status": trace.status})
+            return response.model_copy(update={"trace_id": trace.trace_id})
+        except Exception as exc:
+            trace = recorder.complete(status="error", error=f"{type(exc).__name__}: {exc}"[:500])
+            if on_event:
+                on_event({"type": "error", "error": trace.error or "问答执行失败"})
+            raise
+        finally:
+            try:
+                self.trace_store.append(trace)
+            except Exception:
+                # 追踪故障不能反向破坏已经完成的问答主流程。
+                pass
+
+    def list_traces(self, *, user_id: str, limit: int = 50) -> list[TraceRecord]:
+        """按用户返回脱敏后的近期运行轨迹。"""
+
+        return self.trace_store.list(limit=limit, user_id=user_id)
+
+    def load_trace(self, trace_id: str, *, user_id: str) -> TraceRecord:
+        """按用户读取一条运行轨迹，避免跨用户查看调试信息。"""
+
+        return self.trace_store.load(trace_id, user_id=user_id)
+
+    def _ask_langgraph(
+        self,
+        request: AskRequest,
+        recorder: TraceRecorder,
+        memory_warnings: list[str],
+    ) -> AskResponse:
+        gateway = AuthorizedToolGateway(
+            ActorContext(user_id=request.user_id, session_id=request.session_id),
+            policies={
+                "retrieve_evidence": ToolRuntimePolicy(timeout_s=45.0, max_retries=1, resources=frozenset({"retrieval"})),
+                "generate_answer": ToolRuntimePolicy(timeout_s=180.0, resources=frozenset({"generator"})),
+                "semantic_judge": ToolRuntimePolicy(timeout_s=180.0, resources=frozenset({"judge"})),
+            },
+        )
+
+        def resolve_context(query: str, paper_id: str | None) -> ContextGuardDecision:
+            if not request.use_context_guard:
+                return ContextGuardDecision(query=query, action="proceed", resolved_paper_id=paper_id)
+            try:
+                session = self._session_store(request).load()
+                profile = self._profile_store(request).load()
+            except Exception as exc:
+                # 上下文记忆不可用时回退为空文件记忆，避免影响证据问答主链路。
+                memory_warnings.append(f"memory context degraded: {type(exc).__name__}")
+                session = SessionMemoryStore(self.session_memory_path).load()
+                profile = UserProfileStore(self.profile_memory_path).load()
+            return ContextGuard(self._context_entity_resolver()).decide(
+                query,
+                explicit_paper_id=paper_id,
+                session=session,
+                profile=profile,
+            )
+
+        def retrieve(
+            query: str,
+            top_k: int,
+            paper_id: str | None,
+            kind: object | None,
+            use_rerank: bool,
+        ) -> list[object]:
+            scoped_request = request.model_copy(
+                update={"paper_id": paper_id, "kind": kind, "use_rerank": use_rerank}
+            )
+            return self._retriever(scoped_request).search(query, top_k, paper_id=paper_id, kind=kind)
+
+        graph = build_research_graph(
+            ResearchGraphServices(
+                resolve_context=resolve_context,
+                retrieve=retrieve,
+                build_evidence=build_evidence_pack,
+                answer=AnswerAgent(self._llm_client()).answer,
+                judge=(self._judge_client().evaluate if self.judge_url else None),
+                run_tool=gateway.run,
+            )
+        )
+        state = graph.invoke(
+            {
+                "query": request.query,
+                "paper_id": request.paper_id,
+                "kind": request.kind,
+                "top_k": request.top_k,
+                "use_rerank": request.use_rerank,
+                "max_attempts": request.max_answer_attempts,
+                "trace_recorder": recorder,
+            }
+        )
+        run = ResearchGraphRun(state)
+        bundle = AnswerBundle(
+            evidence_pack=run.evidence_pack,
+            answer=run.answer,
+            citation_validation=run.citation_validation,
+            generator_model=self.generator_model,
+        )
+        return AskResponse(
+            bundle=bundle,
+            semantic_report=run.semantic_report,
+            semantic_gate_enabled=run.semantic_gate_enabled,
+            semantic_gate_passed=run.semantic_gate_passed,
+            attempts=run.attempts,
+            memory=build_memory_summary(bundle, run.semantic_report),
+            context=run.context,
+            runtime="langgraph",
+            rewrite_count=run.rewrite_count,
+            refusal_kind=run.refusal_kind,
+            route_intent=run.route_plan.intent.value if run.route_plan else None,
+            route_confidence=run.route_plan.confidence if run.route_plan else None,
+            retrieval_policy=(
+                {
+                    "evidence_types": [item.value for item in run.route_plan.required_evidence_types],
+                    "preferred_sections": run.route_plan.preferred_sections,
+                    "use_rerank": run.route_plan.use_rerank,
+                    "use_graph": run.route_plan.use_graph,
+                    "use_judge": run.route_plan.use_judge,
+                    "sub_question_count": len(run.evidence_plan.sub_questions) if run.evidence_plan else 0,
+                    "minimum_evidence_count": run.evidence_plan.minimum_evidence_count if run.evidence_plan else 0,
+                }
+                if run.route_plan
+                else {}
+            ),
+        )
+
+    def _ask_legacy(self, request: AskRequest) -> AskResponse:
         context_decision = None
         effective_paper_id = request.paper_id
         if request.use_context_guard:
             context_decision = ContextGuard(self._context_entity_resolver()).decide(
                 request.query,
                 explicit_paper_id=request.paper_id,
-                session=SessionMemoryStore(self.session_memory_path).load(),
-                profile=UserProfileStore(self.profile_memory_path).load(),
+                session=self._session_store(request).load(),
+                profile=self._profile_store(request).load(),
             )
             if context_decision.needs_clarification:
                 return self._clarification_response(request, context_decision)
@@ -143,6 +583,7 @@ class LazyPaperQAService:
             attempts=attempts,
             memory=build_memory_summary(bundle, semantic_report),
             context=context_decision,
+            runtime="legacy",
         )
 
     def _context_entity_resolver(self):
@@ -153,6 +594,64 @@ class LazyPaperQAService:
             )
             self._entity_resolver_loaded = True
         return self._entity_resolver
+
+    def _session_store(self, request: AskRequest):
+        if self.memory_backend != "distributed":
+            return SessionMemoryStore(self.session_memory_path)
+        if not self.redis_url:
+            raise RuntimeError("REDIS_URL is required when PAPER_AGENT_MEMORY_BACKEND=distributed")
+        return RedisSessionMemoryStore(
+            self.redis_url,
+            user_id=request.user_id,
+            session_id=request.session_id,
+        )
+
+    def _profile_store(self, request: AskRequest):
+        if self.memory_backend != "distributed":
+            return UserProfileStore(self.profile_memory_path)
+        if not self.mysql_url:
+            raise RuntimeError("MYSQL_URL is required when PAPER_AGENT_MEMORY_BACKEND=distributed")
+        if self._mysql_memory is None:
+            self._mysql_memory = MySQLLongTermMemoryStore(self.mysql_url)
+        return MySQLUserProfileStore(self._mysql_memory, request.user_id)
+
+    def _persist_conversation(self, request: AskRequest, response: AskResponse) -> None:
+        """持久化用户会话记忆，但不触碰 Paper KG。
+
+        文件模式保留旧版仅回答工件的行为；分布式模式将受限原始窗口写入 Redis，
+        将可审计的持久副本写入 MySQL。
+        """
+
+        if self.memory_backend != "distributed":
+            return
+        if self._mysql_memory is None:
+            # _profile_store 会校验 MYSQL_URL 并初始化仓储。
+            self._profile_store(request)
+        assert self._mysql_memory is not None
+        window = RedisConversationWindowStore(
+            self.redis_url or "",
+            user_id=request.user_id,
+            session_id=request.session_id,
+        )
+        turns = [
+            ConversationTurn(role="user", content=request.query),
+            ConversationTurn(
+                role="assistant",
+                content=response.bundle.answer.answer,
+                metadata={
+                    "abstained": response.bundle.answer.abstained,
+                    "paper_id": response.context.resolved_paper_id if response.context else request.paper_id,
+                    "runtime": response.runtime,
+                },
+            ),
+        ]
+        for turn in turns:
+            window.append(turn)
+            self._mysql_memory.append_turn(request.user_id, request.session_id, turn)
+        self._session_store(request).update(
+            last_query=request.query,
+            current_paper_id=(response.context.resolved_paper_id if response.context else request.paper_id),
+        )
 
     @staticmethod
     def _clarification_response(
@@ -269,20 +768,278 @@ class LazyPaperQAService:
         )
 
 
-def create_app(service: PaperQAService | None = None):
+def create_app(
+    service: PaperQAService | None = None,
+    graph_service: GraphReadService | None = None,
+    ingestion_service: IngestionService | None = None,
+    research_plan_store: ResearchPlanStore | None = None,
+):
     if FastAPI is None:
         raise RuntimeError("Install the api extra: pip install -e '.[api]'")
     app = FastAPI(title="VLM-PaperAgent API", version="0.1.0")
     qa_service = service or LazyPaperQAService()
+    graph_reader = graph_service or LocalGraphReadService(
+        graph_path=os.getenv("PAPER_AGENT_GRAPH", "artifacts/graph"),
+        workspace_path=os.getenv("PAPER_AGENT_GRAPH_WORKSPACE") or None,
+    )
+    ingestion = ingestion_service or LocalIngestionTaskStore(
+        os.getenv("PAPER_AGENT_INGESTION_ROOT", "artifacts/ingestion")
+    )
+    if research_plan_store is not None:
+        plan_store = research_plan_store
+    elif os.getenv("PAPER_AGENT_MEMORY_BACKEND", "file") == "distributed" and os.getenv("MYSQL_URL"):
+        plan_store = MySQLResearchPlanStore(os.environ["MYSQL_URL"])
+    else:
+        plan_store = LocalResearchPlanStore(
+            os.getenv("PAPER_AGENT_RESEARCH_PLAN_ROOT", "artifacts/research_plans")
+        )
+    research_plans = ApiResearchPlanService(plan_store, qa_service, graph_reader)
+
+    def actor_from_headers(
+        x_user_id: str | None,
+        x_session_id: str | None,
+    ) -> ActorContext:
+        """Accept identity headers only in explicitly trusted-proxy mode.
+
+        A raw HTTP header is not authentication. Production must set this mode only
+        behind a gateway that validates the user identity (for example JWT/OIDC).
+        """
+
+        mode = os.getenv("PAPER_AGENT_AUTH_MODE", "local")
+        if mode == "trusted-header":
+            if not x_user_id or not x_session_id:
+                raise HTTPException(status_code=401, detail="authenticated user and session headers required")
+            return ActorContext(user_id=x_user_id, session_id=x_session_id)
+        return ActorContext(user_id="local-user", session_id=x_session_id or "local-session")
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/ask", response_model=AskResponse)
-    def ask(request: AskRequest) -> AskResponse:
+    @app.get("/health/storage", response_model=StorageHealthReport)
+    def storage_health() -> StorageHealthReport:
+        """返回三类存储的无数据健康状态，用于部署验收与故障排查。"""
+
+        return check_storage_health(
+            redis_url=os.getenv("REDIS_URL"),
+            mysql_url=os.getenv("MYSQL_URL"),
+            neo4j_uri=os.getenv("NEO4J_URI"),
+            neo4j_user=os.getenv("NEO4J_USER"),
+            neo4j_password=os.getenv("NEO4J_PASSWORD"),
+        )
+
+    @app.get("/traces", response_model=list[TraceRecord])
+    def list_traces(
+        limit: int = 20,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> list[TraceRecord]:
+        if not isinstance(qa_service, TraceReadService):
+            raise HTTPException(status_code=501, detail="trace endpoint requires LazyPaperQAService")
+        actor = actor_from_headers(x_user_id, x_session_id)
+        return qa_service.list_traces(user_id=actor.user_id, limit=max(1, min(limit, 100)))
+
+    @app.get("/traces/{trace_id}", response_model=TraceRecord)
+    def get_trace(
+        trace_id: str,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> TraceRecord:
+        if not isinstance(qa_service, TraceReadService):
+            raise HTTPException(status_code=501, detail="trace endpoint requires LazyPaperQAService")
+        actor = actor_from_headers(x_user_id, x_session_id)
         try:
-            response = qa_service.ask(request)
+            return qa_service.load_trace(trace_id, user_id=actor.user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="trace not found") from exc
+
+    @app.get("/papers", response_model=list[PaperSummary])
+    def papers() -> list[PaperSummary]:
+        try:
+            return graph_reader.papers()
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/research/plans", response_model=list[ResearchPlan])
+    def list_research_plans(
+        limit: int = 20,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> list[ResearchPlan]:
+        actor = actor_from_headers(x_user_id, x_session_id)
+        return research_plans.list(user_id=actor.user_id, limit=max(1, min(limit, 100)))
+
+    @app.post("/research/plans", response_model=ResearchPlan, status_code=201)
+    def create_research_plan(
+        request: ResearchPlanCreateRequest,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> ResearchPlan:
+        try:
+            actor = actor_from_headers(x_user_id, x_session_id)
+            return research_plans.create(user_id=actor.user_id, goal=request.goal, paper_ids=request.paper_ids)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/research/plans/{plan_id}", response_model=ResearchPlan)
+    def get_research_plan(
+        plan_id: str,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> ResearchPlan:
+        actor = actor_from_headers(x_user_id, x_session_id)
+        try:
+            return research_plans.load(user_id=actor.user_id, plan_id=plan_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="research plan not found") from exc
+
+    @app.post("/research/plans/{plan_id}/execute", response_model=ResearchPlan)
+    def execute_research_plan(
+        plan_id: str,
+        request: ResearchPlanExecuteRequest,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> ResearchPlan:
+        try:
+            actor = actor_from_headers(x_user_id, x_session_id)
+            return research_plans.execute(
+                user_id=actor.user_id,
+                session_id=actor.session_id,
+                plan_id=plan_id,
+                confirmed=request.confirm,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="research plan not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/graph/concepts", response_model=GraphConceptResponse)
+    def graph_concepts(q: str, limit: int = 8) -> GraphConceptResponse:
+        if not q.strip():
+            raise HTTPException(status_code=422, detail="q must not be empty")
+        try:
+            return graph_reader.concept(q.strip(), max(1, min(limit, 20)))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/ingestion/tasks", response_model=list[IngestionTask])
+    def list_ingestion_tasks(limit: int = 20) -> list[IngestionTask]:
+        try:
+            return ingestion.list(max(1, min(limit, 100)))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/ingestion/tasks/{task_id}", response_model=IngestionTask)
+    def get_ingestion_task(task_id: str) -> IngestionTask:
+        try:
+            return ingestion.load(task_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/ingestion/tasks", response_model=IngestionTask, status_code=201)
+    async def create_ingestion_task(file: UploadFile = File(...)) -> IngestionTask:
+        try:
+            if not file.filename:
+                raise ValueError("uploaded file must have a filename")
+            return ingestion.create(file.filename, await file.read())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/ingestion/tasks/{task_id}/retry", response_model=IngestionTask)
+    def retry_ingestion_task(task_id: str) -> IngestionTask:
+        try:
+            return ingestion.retry(task_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post(
+        "/ingestion/tasks/{task_id}/promote",
+        response_model=WorkspacePromotionResponse,
+    )
+    def promote_ingestion_task(task_id: str) -> WorkspacePromotionResponse:
+        try:
+            task = ingestion.load(task_id)
+            if task.status.value != "succeeded" or not task.paper_path or not task.chunks_path:
+                raise ValueError("only a successfully parsed task can be promoted")
+            workspace_path = os.getenv("PAPER_AGENT_GRAPH_WORKSPACE")
+            if not workspace_path:
+                raise ValueError("PAPER_AGENT_GRAPH_WORKSPACE must be configured")
+            paper = Paper.model_validate_json(Path(task.paper_path).read_text(encoding="utf-8"))
+            chunks = ChunkBundle.model_validate_json(Path(task.chunks_path).read_text(encoding="utf-8"))
+            workspace = LocalGraphWorkspaceStore(workspace_path)
+            delta = delta_from_fragment(
+                workspace.load_effective_graph(),
+                build_paper_fragment(paper, chunks),
+            )
+            if not delta.added_nodes and not delta.added_edges:
+                ingestion.mark_promoted(
+                    task_id,
+                    workspace_path=workspace_path,
+                    commit_id=None,
+                    message="workspace promotion no-op; paper already visible",
+                )
+                return WorkspacePromotionResponse(
+                    task_id=task_id,
+                    workspace_path=workspace_path,
+                    added_nodes=0,
+                    added_edges=0,
+                    valid_after_commit=True,
+                    status="already_visible",
+                )
+            report = GraphValidator().validate(workspace.preview_delta(delta))
+            if not report.valid:
+                raise ValueError("workspace promotion would make graph invalid: " + "; ".join(report.errors))
+            commit = workspace.commit_delta(
+                delta,
+                author_id=os.getenv("PAPER_AGENT_WORKSPACE_AUTHOR", "web-user"),
+                message=f"add uploaded paper {paper.paper_id}",
+            )
+            ingestion.mark_promoted(
+                task_id,
+                workspace_path=workspace_path,
+                commit_id=commit.commit_id,
+                message=f"promoted paper into workspace commit {commit.commit_id}",
+            )
+            return WorkspacePromotionResponse(
+                task_id=task_id,
+                workspace_path=workspace_path,
+                commit_id=commit.commit_id,
+                added_nodes=len(delta.added_nodes),
+                added_edges=len(delta.added_edges),
+                valid_after_commit=True,
+                status="promoted",
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/ask", response_model=AskResponse)
+    def ask(
+        request: AskRequest,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> AskResponse:
+        try:
+            actor = actor_from_headers(x_user_id, x_session_id)
+            scoped_request = request.model_copy(
+                update={"user_id": actor.user_id, "session_id": actor.session_id}
+            )
+            response = qa_service.ask(scoped_request)
             if response.memory is None:
                 response = response.model_copy(
                     update={
@@ -296,14 +1053,58 @@ def create_app(service: PaperQAService | None = None):
                 response = response.model_copy(
                     update={
                         "context": ContextGuard().decide(
-                            request.query,
-                            explicit_paper_id=request.paper_id,
+                            scoped_request.query,
+                            explicit_paper_id=scoped_request.paper_id,
                         )
                     }
                 )
             return response
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/ask/stream")
+    def ask_stream(
+        request: AskRequest,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ):
+        """以 SSE 返回受控执行状态，最终事件才携带正式回答。"""
+
+        if not isinstance(qa_service, ProgressPaperQAService):
+            raise HTTPException(status_code=501, detail="streaming requires LazyPaperQAService")
+        actor = actor_from_headers(x_user_id, x_session_id)
+        scoped_request = request.model_copy(
+            update={"user_id": actor.user_id, "session_id": actor.session_id}
+        )
+        events: queue.Queue[dict[str, object] | None] = queue.Queue()
+
+        def publish(event: dict[str, object]) -> None:
+            events.put(event)
+
+        def run() -> None:
+            try:
+                publish({"type": "started", "message": "已接收问题，正在启动受控工作流"})
+                response = qa_service.ask_with_progress(scoped_request, publish)
+                publish({"type": "answer", "response": response.model_dump(mode="json")})
+            except Exception as exc:
+                publish({"type": "error", "error": str(exc)[:500]})
+            finally:
+                events.put(None)
+
+        def stream() -> Iterator[str]:
+            worker = threading.Thread(target=run, daemon=True, name="paper-agent-sse")
+            worker.start()
+            while True:
+                event = events.get()
+                if event is None:
+                    break
+                yield f"event: {event.get('type', 'progress')}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(stream(), media_type="text/event-stream")
 
     return app
 

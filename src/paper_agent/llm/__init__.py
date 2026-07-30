@@ -1,4 +1,4 @@
-"""LLM clients and structured-output validation."""
+"""LLM 客户端与结构化输出校验。"""
 
 from .client import (
     GlmStructuredClient,

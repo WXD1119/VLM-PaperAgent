@@ -8,7 +8,7 @@ def recall_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
 
 
 def hit_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
-    """Return 1 when at least one relevant item appears in the top-k results."""
+    """当 Top-k 中至少出现一个相关项时返回 1。"""
     if not relevant:
         return 1.0
     return 1.0 if set(retrieved[:k]) & relevant else 0.0
@@ -22,7 +22,7 @@ def reciprocal_rank(retrieved: list[str], relevant: set[str]) -> float:
 
 
 def ndcg_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
-    """Binary-relevance normalized discounted cumulative gain at k."""
+    """二元相关性的 k 截断归一化折损累积增益。"""
     if not relevant:
         return 1.0
     dcg = sum(

@@ -678,3 +678,76 @@
 - Added `scripts/build_vlm_paper_id_map.py` and `annotate_retrieval.py --paper-id-map`
   so v2 draft questions with `paper_key` automatically resolve to hash-based
   `paper_id` values during annotation.
+
+## 2026-07-14: Neo4j Materialized Paper KG
+
+- Added `Neo4jGraphStore` as an optional adapter that materializes the existing JSONL
+  graph or workspace effective graph into Neo4j using stable `node_id` and `edge_id`.
+- Kept JSONL plus workspace commits as the source of truth; Neo4j stores only the
+  paper graph view and filters legacy Answer/Claim/Query artifacts before export.
+- Added `scripts/export_neo4j.py` for idempotent export and
+  `scripts/query_neo4j.py` for paper/concept smoke-test queries.
+- Added Docker Compose persistence for Neo4j and `docs/neo4j-integration.md` with
+  startup, export and verification commands.
+- Added a driver-free adapter test that validates schema setup, reset behavior and
+  stable node/edge payload generation without requiring a live database.
+
+## 2026-07-14: Web Reading Desk MVP
+
+- Replaced the Streamlit placeholder with a reading desk for evidence-grounded QA and
+  Paper KG concept exploration.
+- Extended FastAPI with read-only `/papers` and `/graph/concepts` endpoints; the latter
+  exposes ambiguity as concept candidates rather than silently choosing a meaning.
+- Kept the heavy retrieval/generation models in FastAPI and the independent GLM judge
+  behind the API, so the UI does not duplicate GPU model memory.
+- Added API tests for paper listing and concept-to-evidence responses, plus
+  `docs/web-ui.md` for server startup, VS Code port forwarding and smoke tests.
+
+## 2026-07-14: PDF Ingestion Task MVP
+
+- Added durable file-backed ingestion tasks with explicit `pending`, `running`,
+  `succeeded`, and `failed` states.
+- Added upload/list/retry API endpoints and a Streamlit upload/status page.
+- Added a sequential worker that invokes MinerU, normalization, chunking, dense
+  indexing outside the HTTP request, then waits for explicit workspace promotion
+  before changing a Paper KG branch.
+- Added task-store and API tests covering PDF validation, persistence, retry, upload,
+  and task listing.
+
+## 2026-07-15: Recruiting-Oriented Product Roadmap
+
+- Added `docs/recruiting-roadmap.md` to consolidate the system's quantitative
+  retrieval/answer-quality evidence, AI application engineering value, next-stage
+  architecture priorities, six-week learning route, resume wording, and explicit
+  scope boundaries.
+
+## 2026-07-15: LangGraph Runtime and Three-Store Memory Migration
+
+- Added a deterministic LangGraph Research–Judge workflow with clarification,
+  retrieval, citation validation, semantic retry, and safe-refusal transitions.
+- Added Redis adapters for expiring SessionState and bounded raw conversation windows.
+- Added a MySQL-compatible SQLAlchemy repository for user profiles, episodic events,
+  compressed summaries, and durable conversation turns.
+- Kept Neo4j restricted to Paper KG semantic memory; user conversations and preferences
+  remain outside the graph.
+- Added actor/scope policy primitives and untrusted-evidence delimiters to resist prompt
+  injection from extracted PDF content.
+
+## 2026-07-16: LangGraph 全链路可观测性
+
+- 为每次 `/ask` 分配脱敏 `trace_id`，记录 LangGraph 上下文判断、检索、生成、引用校验、
+  Judge 与记忆持久化节点的耗时、状态和错误摘要。
+- Trace 仅保存问题 SHA256、计数和受控决策元数据，不保存原始问题、论文正文、密钥或完整模型输出。
+- 新增 `/traces` 与 `/traces/{trace_id}`，按用户过滤；Streamlit 增加“运行追踪”页面，
+  可直接查看每个节点的耗时和最终质量门结果。
+- 新增跨用户 Trace 隔离测试；本地完整回归为 `140 passed, 2 skipped`。
+
+## 2026-07-16: 可信 Agent 质量闭环与部署验收
+
+- Judge 不通过时仅反馈失败 Claim，状态图记录重写次数；重试耗尽后区分
+  `citation_integrity_failed` 与 `semantic_support_failed` 两类安全拒答。
+- 增加 `AuthorizedToolGateway`，将 LangGraph 节点纳入工具白名单、Scope、超时、重试与
+  资源配置边界；LLM 不能自行选择工具或提升权限。
+- 增加端到端 API 评测脚本，输出 Evidence Hit@5/Recall@5、引用通过率、Judge 覆盖与通过率、
+  重写率和安全拒答率。
+- 增加 Redis/MySQL/Neo4j 的无数据健康检查接口及记忆服务故障降级 Trace。

@@ -1,4 +1,4 @@
-"""Dense + sparse retrieval, RRF fusion and reranking."""
+"""稠密与稀疏检索、RRF 融合及精排。"""
 
 from .dense import DenseHit, InMemoryDenseIndex
 from .embedding import EmbeddingEncoder, SentenceTransformerEncoder

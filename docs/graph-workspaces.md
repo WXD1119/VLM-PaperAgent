@@ -282,8 +282,9 @@ In this project:
 
 - JSONL graph files are the reproducible source of truth.
 - Workspace deltas provide Git-like branching semantics.
-- Neo4j, if introduced, should be a derived index for visualization and complex graph
-  queries.
+- Neo4j is an optional derived index for visualization and complex graph queries;
+  `scripts/export_neo4j.py` materializes either the base graph or a workspace effective
+  graph without changing workspace commits.
 
 This keeps the MVP lightweight while preserving an upgrade path to production-grade
 graph storage.
@@ -377,6 +378,14 @@ Deliverables:
 Import effective graphs into Neo4j for visualization and Cypher demos. This should be
 optional, because the resume-critical value is traceability and isolation, not the
 presence of a heavyweight database.
+
+Current P4 implementation:
+
+- `paper_agent.storage.Neo4jGraphStore` writes stable `node_id` and `edge_id` values
+  into a generic `:GraphNode` / `:GRAPH_EDGE` materialized view.
+- `scripts/export_neo4j.py` exports a base JSONL graph or workspace effective graph.
+- `scripts/query_neo4j.py --papers` and `--concept` provide smoke-test queries.
+- Neo4j remains derived; JSONL plus workspace deltas remain the source of truth.
 
 ## Resume Value
 

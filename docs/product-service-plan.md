@@ -195,7 +195,7 @@ Typical actions:
 - fork a public/team graph;
 - add private papers;
 - diff the private graph against its base;
-- later export the effective graph to Neo4j.
+- export the effective graph to Neo4j when visualization or Cypher queries are needed.
 
 Output style: workspace list, diff report and validation status.
 
@@ -229,7 +229,8 @@ relationships before generating an answer or presenting a graph neighborhood.
 4. Extend `query_graph.py --concept` into a fuller Concept Graph Explorer panel that prints the structured
    Concept Graph Explorer panel.
 5. Implement graph workspace fork/effective graph loading.
-6. Add Neo4j export after the JSONL graph and workspace semantics are stable.
+6. Neo4j export is available as an optional materialized view; keep JSONL/workspace as
+   the source of truth and use Neo4j for visualization or complex graph queries.
 
 This order keeps the MVP grounded: concept search proves the graph is useful to users,
 workspace branching proves multi-user isolation, and Neo4j then becomes a real

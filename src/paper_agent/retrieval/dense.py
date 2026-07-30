@@ -25,7 +25,7 @@ class _DenseRecord:
 
 
 class InMemoryDenseIndex:
-    """Reference cosine index used for tests and small local experiments."""
+    """用于测试和小型本地实验的参考余弦索引。"""
 
     def __init__(self, encoder: EmbeddingEncoder) -> None:
         self.encoder = encoder

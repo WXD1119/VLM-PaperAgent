@@ -17,7 +17,7 @@ _TOKEN = re.compile(
 
 
 def tokenize_academic(text: str) -> list[str]:
-    """Tokenize prose, table HTML and LaTeX commands for lexical retrieval."""
+    """为词法检索切分正文、表格 HTML 与 LaTeX 命令。"""
     clean = unescape(_HTML_TAG.sub(" ", text))
     return [token.lower() for token in _TOKEN.findall(clean)]
 
@@ -34,7 +34,7 @@ class SparseHit(BaseModel):
 
 
 class BM25Index:
-    """Small, dependency-free BM25Okapi index for reproducible baselines."""
+    """轻量、无额外依赖且可复现的 BM25Okapi 基线索引。"""
 
     def __init__(
         self,

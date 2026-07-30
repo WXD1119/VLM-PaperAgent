@@ -1,4 +1,4 @@
-"""Tool orchestration primitives for agent workflows."""
+"""Agent 工作流的工具编排基础组件。"""
 
 from .orchestrator import (
     ResourceAccess,
@@ -8,6 +8,7 @@ from .orchestrator import (
     ToolSpec,
     ToolStatus,
 )
+from .gateway import AuthorizedToolGateway, ToolRuntimePolicy
 
 __all__ = [
     "ResourceAccess",
@@ -16,4 +17,6 @@ __all__ = [
     "ToolResult",
     "ToolSpec",
     "ToolStatus",
+    "AuthorizedToolGateway",
+    "ToolRuntimePolicy",
 ]

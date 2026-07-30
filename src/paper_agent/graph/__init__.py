@@ -1,4 +1,4 @@
-"""Lightweight evidence graph models, builders and JSONL storage."""
+"""轻量证据图谱模型、构建器与 JSONL 存储。"""
 
 from .builder import GraphBuilder
 from .fragments import (

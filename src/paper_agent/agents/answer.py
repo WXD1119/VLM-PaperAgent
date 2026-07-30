@@ -10,6 +10,8 @@ from paper_agent.domain.answer import (
 )
 from paper_agent.llm.client import LLMClient
 from paper_agent.retrieval.reranker import RerankedHit
+from paper_agent.security import render_untrusted_evidence
+from paper_agent.security.evidence import UNTRUSTED_EVIDENCE_NOTICE
 
 
 SYSTEM_PROMPT = """You are an evidence-grounded paper reading assistant.
@@ -39,14 +41,7 @@ def build_evidence_pack(query: str, hits: list[RerankedHit]) -> EvidencePack:
 
 
 def render_evidence_prompt(pack: EvidencePack) -> str:
-    blocks = [f"Question: {pack.query}"]
-    for item in pack.items:
-        section = " > ".join(item.section_path) or "(unknown section)"
-        blocks.append(
-            f"[{item.evidence_id}] paper={item.paper_id}; pages={item.pages}; "
-            f"kind={item.kind.value}; section={section}\n{item.content}"
-        )
-    return "\n\n".join(blocks)
+    return render_untrusted_evidence(pack)
 
 
 class CitationValidator:
@@ -96,12 +91,10 @@ class AnswerAgent:
 
 
 class SemanticCitationJudge:
-    """Judge whether each claim is entailed by its cited evidence.
+    """审查每条 Claim 是否由其引用证据直接蕴含。
 
-    The judge first tries one batched LLM call for efficiency. If the model omits,
-    duplicates, misnumbers claim assessments, or returns malformed structured
-    output, it falls back to one call per claim. This keeps evaluation robust
-    with local thinking models whose JSON is not always schema-complete.
+    Judge 先尝试一次批量 LLM 调用以提升效率；如果模型漏项、重复、编号错误或
+    返回格式错误，则降级为逐 Claim 调用。这能兼容 JSON 契约不稳定的本地推理模型。
     """
 
     def __init__(self, client: LLMClient) -> None:
@@ -114,9 +107,12 @@ class SemanticCitationJudge:
             return SemanticCitationReport()
         evidence = {item.evidence_id: item for item in pack.items}
         blocks = [
-            "Evaluate whether each claim is supported by its cited evidence only. "
-            "Use supported only when all material details are directly supported; use "
-            "partially_supported for overstatement, and unsupported for contradiction or absence."
+            (
+                "Evaluate whether each claim is supported by its cited evidence only. "
+                "Use supported only when all material details are directly supported; use "
+                "partially_supported for overstatement, and unsupported for contradiction or absence."
+            ),
+            UNTRUSTED_EVIDENCE_NOTICE,
         ]
         for index, claim in enumerate(answer.claims, start=1):
             blocks.append(f"Claim {index}: {claim.text}")
@@ -128,10 +124,8 @@ class SemanticCitationJudge:
             if self._is_complete(report, len(answer.claims)):
                 return self._validate_evidence_ids(report, set(evidence))
         except Exception:
-            # Batched judging is an optimization, not a hard dependency. Local
-            # thinking models often fail the batched JSON contract while still
-            # succeeding on smaller single-claim prompts, so we degrade
-            # gracefully instead of failing the whole answer.
+            # 批量审查是优化而非强依赖。本地推理模型可能无法遵守批量 JSON 契约，
+            # 但能处理更小的单 Claim 提示，因此这里降级而非让整条回答失败。
             pass
 
         assessments = [
@@ -168,6 +162,7 @@ class SemanticCitationJudge:
             f"Return exactly one assessment with claim_index={index}. "
             "Use supported only when all material details are directly supported; use "
             "partially_supported for overstatement, and unsupported for contradiction or absence.",
+            UNTRUSTED_EVIDENCE_NOTICE,
             f"Claim {index}: {claim.text}",
         ]
         for evidence_id in claim.evidence_ids:
