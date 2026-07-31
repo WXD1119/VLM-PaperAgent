@@ -212,3 +212,20 @@ def test_langgraph_rewrites_once_then_refuses_when_judge_keeps_rejecting():
     assert run.answer.abstained is True
     assert run.refusal_kind == "semantic_support_failed"
     assert run.rewrite_count == 1
+
+
+def test_langgraph_uses_graph_candidates_as_retrieval_scope_for_multi_hop_questions():
+    retrieved_paper_ids: list[str | None] = []
+    hit = type("Hit", (), {"chunk_id": "graph-chunk", "paper_id": "paper-graph", "kind": ChunkKind.TEXT, "section_path": [], "pages": [1], "content": "Graph evidence"})()
+    graph = build_research_graph(
+        ResearchGraphServices(
+            resolve_context=lambda query, paper_id: ContextGuardDecision(action=ContextGuardAction.PROCEED, query=query, resolved_paper_id=paper_id),
+            retrieve=lambda _query, _top_k, paper_id, *_args: retrieved_paper_ids.append(paper_id) or [hit],
+            build_evidence=lambda query, _hits: EvidencePack(query=query, items=[EvidenceItem(evidence_id="E1", chunk_id="graph-chunk", paper_id="paper-graph", kind=ChunkKind.TEXT, pages=[1], content="Graph evidence")]),
+            answer=lambda _pack, _feedback: (GroundedAnswer(answer="Grounded", claims=[AnswerClaim(text="Grounded", evidence_ids=["E1"])]), CitationValidation(valid=True, claim_count=1, cited_claim_count=1)),
+            graph_candidates=lambda _query, _limit: ["paper-graph"],
+        )
+    )
+    run = ResearchGraphRun(graph.invoke({"query": "哪些论文存在关系路径", "top_k": 2, "max_attempts": 1}))
+    assert run.answer.abstained is False
+    assert retrieved_paper_ids and set(retrieved_paper_ids) == {"paper-graph"}

@@ -12,6 +12,7 @@ from .contracts import (
     resolve_scope,
 )
 from .hooks import HookEvent, WorkflowHooks
+from .policy import GovernedWorkflowHooks, GovernanceCounters, GovernanceViolation, WorkflowGovernance, WorkflowLimits
 from .router import ResearchRouteDecision, ResearchRouteRequest, ResearchRouter
 
 __all__ = [
@@ -22,6 +23,9 @@ __all__ = [
     "ContextSelection",
     "CorpusScope",
     "HandoffPacket",
+    "GovernedWorkflowHooks",
+    "GovernanceCounters",
+    "GovernanceViolation",
     "HookEvent",
     "ResearchSession",
     "ResearchRouteDecision",
@@ -29,5 +33,7 @@ __all__ = [
     "ResearchRouter",
     "ScopeResolution",
     "WorkflowHooks",
+    "WorkflowGovernance",
+    "WorkflowLimits",
     "resolve_scope",
 ]

@@ -20,6 +20,15 @@ from .context_guard import ContextGuardCase, ContextGuardEvaluation, evaluate_co
 from .end_to_end import EndToEndEvaluation, EndToEndResponse, evaluate_end_to_end
 from .golden import RetrievalCase, RetrievalEvaluation, evaluate_bm25, evaluate_retriever
 from .routing import RoutingCaseResult, RoutingEvaluation, RoutingGoldenCase, evaluate_routing
+from .governance import (
+    RouterDispatchCase,
+    RouterDispatchEvaluation,
+    ScopeLeakCase,
+    ScopeLeakCaseResult,
+    ScopeLeakEvaluation,
+    evaluate_router_dispatches,
+    evaluate_scope_leaks,
+)
 
 __all__ = [
     "CitationCaseLabel",
@@ -39,6 +48,11 @@ __all__ = [
     "RoutingCaseResult",
     "RoutingEvaluation",
     "RoutingGoldenCase",
+    "RouterDispatchCase",
+    "RouterDispatchEvaluation",
+    "ScopeLeakCase",
+    "ScopeLeakCaseResult",
+    "ScopeLeakEvaluation",
     "evaluate_bm25",
     "evaluate_answer_quality",
     "evaluate_answer_quality_gate",
@@ -47,5 +61,7 @@ __all__ = [
     "evaluate_end_to_end",
     "evaluate_retriever",
     "evaluate_routing",
+    "evaluate_router_dispatches",
+    "evaluate_scope_leaks",
     "find_risky_answer_cases",
 ]

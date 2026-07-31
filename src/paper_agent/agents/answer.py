@@ -6,7 +6,6 @@ from paper_agent.domain.answer import (
     EvidencePack,
     GroundedAnswer,
     SemanticCitationReport,
-    SupportVerdict,
 )
 from paper_agent.llm.client import LLMClient
 from paper_agent.retrieval.reranker import RerankedHit

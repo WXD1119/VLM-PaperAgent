@@ -52,7 +52,9 @@ class ResearchRouter:
                 "review_write",
                 self._review_scope(request),
                 0.92,
-                needs_confirmation=not bool(request.selected_paper_ids),
+                # Selected papers resolve the corpus, but never authorize a
+                # potentially expensive plan-and-execute review run.
+                needs_confirmation=True,
             )
         if any(token in text for token in ("比较", "对比", "区别", "差异", "compare")):
             if len(request.selected_paper_ids) < 2:
@@ -90,7 +92,7 @@ class ResearchRouter:
             )
         agent, mode = item
         scope = self._scope_for_mode(request, mode)
-        needs_confirmation = mode == "review_write" and not bool(request.selected_paper_ids)
+        needs_confirmation = mode == "review_write"
         return self._decision(agent, mode, scope, 1.0, needs_confirmation=needs_confirmation)
 
     @staticmethod

@@ -17,20 +17,39 @@ from .reading_compare import (
 )
 from .review_writer import (
     DeterministicReviewPlanner,
+    EvidenceBoundSectionWriter,
     LiteratureReviewPlan,
     ReviewBudget,
+    ReviewClaim,
+    ReviewEvidence,
+    ReviewExecutionResult,
+    ReflectionAction,
     ReviewReflection,
     ReviewSectionDraft,
+    ReviewSectionPlan,
     ReviewTemplate,
     ReviewWriterServices,
     build_review_writer_graph,
 )
+from .review_matrix import (
+    EvidenceMatrixBuilder,
+    EvidenceMatrixCell,
+    ReviewCitationCoverageValidator,
+    ReviewEvidenceMatrix,
+    ReviewValidationResult,
+    SectionCitationCoverage,
+)
+from .review_semantic import ReviewSectionSemanticJudge, SectionSemanticReview
 
 __all__ = [
     "AnswerAgent", "CitationValidator", "SemanticCitationJudge", "build_evidence_pack",
     "render_evidence_prompt", "ComparisonBudget", "ComparisonCell", "ComparisonMatrix",
     "ComparisonPlan", "DeterministicComparisonPlanner", "ReadingCompareServices",
     "build_reading_compare_graph",
-    "DeterministicReviewPlanner", "LiteratureReviewPlan", "ReviewBudget", "ReviewReflection",
-    "ReviewSectionDraft", "ReviewTemplate", "ReviewWriterServices", "build_review_writer_graph",
+    "DeterministicReviewPlanner", "EvidenceBoundSectionWriter", "LiteratureReviewPlan", "ReviewBudget", "ReviewClaim", "ReviewEvidence",
+    "ReviewExecutionResult", "ReflectionAction", "ReviewReflection", "ReviewSectionDraft", "ReviewSectionPlan",
+    "ReviewTemplate", "ReviewWriterServices", "build_review_writer_graph",
+    "EvidenceMatrixBuilder", "EvidenceMatrixCell", "ReviewCitationCoverageValidator",
+    "ReviewEvidenceMatrix", "ReviewValidationResult", "SectionCitationCoverage",
+    "ReviewSectionSemanticJudge", "SectionSemanticReview",
 ]

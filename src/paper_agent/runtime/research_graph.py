@@ -23,6 +23,7 @@ ToolRunCallable = Callable[[str, Callable[[], Any]], Any]
 RouteCallable = Callable[[str, str | None, object | None, bool], QueryPlan]
 EvidencePlanCallable = Callable[[str, QueryPlan], EvidencePlan]
 QueryRewriteCallable = Callable[[EvidencePlan], EvidencePlan]
+GraphCandidateCallable = Callable[[str, int], list[str]]
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class ResearchGraphServices:
     route: RouteCallable | None = None
     plan_evidence: EvidencePlanCallable | None = None
     rewrite_queries: QueryRewriteCallable | None = None
+    graph_candidates: GraphCandidateCallable | None = None
     context_manager: ContextManager | None = None
     hooks: WorkflowHooks | None = None
 
@@ -78,6 +80,7 @@ class ResearchGraphState(TypedDict, total=False):
     scope_error: str | None
     route_plan: QueryPlan
     evidence_plan: EvidencePlan
+    graph_paper_ids: list[str]
     router_clarification_question: str | None
     evidence_pack: EvidencePack
     answer: GroundedAnswer
@@ -155,6 +158,10 @@ def build_research_graph(services: ResearchGraphServices):
                     "scope_error": "请先确认是否允许联网扩展论文范围。",
                     "router_clarification_question": "请确认是否允许联网扩展论文范围。",
                 }
+            if services.hooks and hasattr(services.hooks, "governance"):
+                # Retrieval/model calls only occur after this node. Updating the
+                # gate here makes it use the ContextGuard-resolved scope.
+                services.hooks.governance.scope = resolution
             return {"scope_resolution": resolution, "scope_error": None}
         except ValueError as exc:
             return {
@@ -246,6 +253,27 @@ def build_research_graph(services: ResearchGraphServices):
             )
         return {"evidence_plan": rewritten}
 
+    def query_graph(state: ResearchGraphState) -> dict[str, Any]:
+        if not state["evidence_plan"].use_graph or services.graph_candidates is None:
+            return {"graph_paper_ids": []}
+        candidates = execute(
+            "query_paper_graph",
+            lambda: services.graph_candidates(state["query"], max(4, state["top_k"] * 2)),
+        )
+        allowed = [
+            paper_id for paper_id in dict.fromkeys(candidates)
+            if state["scope_resolution"].allows(paper_id)
+        ]
+        recorder = state.get("trace_recorder")
+        if recorder:
+            recorder.record_event(
+                "graph_candidates",
+                status="success",
+                elapsed_ms=0,
+                attributes={"candidate_paper_count": len(allowed), "scope": state["scope_resolution"].scope.value},
+            )
+        return {"graph_paper_ids": allowed}
+
     def retrieve(state: ResearchGraphState) -> dict[str, Any]:
         plan = state["evidence_plan"]
         total_paths = sum(len(item.evidence_types) for item in plan.sub_questions)
@@ -256,27 +284,24 @@ def build_research_graph(services: ResearchGraphServices):
         kind_counts: dict[str, int] = {}
         for sub_question in plan.sub_questions:
             for kind in sub_question.evidence_types:
-                hits = execute(
-                    "retrieve_evidence",
-                    lambda query=sub_question.query, evidence_kind=kind: services.retrieve(
-                        query,
-                        candidate_top_k,
-                        state.get("effective_paper_id"),
-                        evidence_kind,
-                        state["route_plan"].use_rerank,
-                    ),
-                )
-                allowed_hits = [
-                    hit
-                    for hit in hits
-                    if state["scope_resolution"].allows(str(getattr(hit, "paper_id", "")))
-                ]
-                for hit in _prioritize_sections(allowed_hits, sub_question.preferred_sections):
-                    chunk_id = str(getattr(hit, "chunk_id", ""))
-                    if chunk_id and chunk_id not in hit_ids:
-                        hit_ids.add(chunk_id)
-                        merged_hits.append(hit)
-                        kind_counts[str(getattr(hit, "kind", "unknown"))] = kind_counts.get(str(getattr(hit, "kind", "unknown")), 0) + 1
+                candidate_papers = state.get("graph_paper_ids") or [state.get("effective_paper_id")]
+                for candidate_paper_id in candidate_papers:
+                    hits = execute(
+                        "retrieve_evidence",
+                        lambda query=sub_question.query, evidence_kind=kind, target_paper_id=candidate_paper_id: services.retrieve(
+                            query, candidate_top_k, target_paper_id, evidence_kind, state["route_plan"].use_rerank,
+                        ),
+                    )
+                    allowed_hits = [
+                        hit for hit in hits
+                        if state["scope_resolution"].allows(str(getattr(hit, "paper_id", "")))
+                    ]
+                    for hit in _prioritize_sections(allowed_hits, sub_question.preferred_sections):
+                        chunk_id = str(getattr(hit, "chunk_id", ""))
+                        if chunk_id and chunk_id not in hit_ids:
+                            hit_ids.add(chunk_id)
+                            merged_hits.append(hit)
+                            kind_counts[str(getattr(hit, "kind", "unknown"))] = kind_counts.get(str(getattr(hit, "kind", "unknown")), 0) + 1
         hits = merged_hits[: max(state["top_k"], plan.minimum_evidence_count)]
         if hits:
             pack = execute("build_evidence", lambda: services.build_evidence(state["query"], hits))
@@ -318,6 +343,9 @@ def build_research_graph(services: ResearchGraphServices):
                 "generate_answer",
                 scope=state["scope_resolution"].scope.value,
                 evidence_count=len(state["evidence_pack"].items),
+                paper_ids=[item.paper_id for item in state["evidence_pack"].items],
+                input_tokens=sum(max(1, len(item.content) // 3) for item in state["evidence_pack"].items),
+                output_tokens=state.get("context_budget", ContextBudget()).output_reserve_tokens,
             )
         answer, validation = execute(
             "generate_answer",
@@ -426,6 +454,7 @@ def build_research_graph(services: ResearchGraphServices):
     graph.add_node("route_query", traced("route_query", route_query))
     graph.add_node("plan_evidence", traced("plan_evidence", plan_evidence))
     graph.add_node("rewrite_queries", traced("rewrite_queries", rewrite_queries))
+    graph.add_node("query_paper_graph", traced("query_paper_graph", query_graph))
     graph.add_node("retrieve_evidence", traced("retrieve_evidence", retrieve))
     graph.add_node("generate_answer", traced("generate_answer", generate))
     graph.add_node("validate_citations", traced("validate_citations", validate_citations))
@@ -437,7 +466,8 @@ def build_research_graph(services: ResearchGraphServices):
     graph.add_edge("clarification", END)
     graph.add_conditional_edges("route_query", after_route, {"clarification": "clarification", "plan_evidence": "plan_evidence"})
     graph.add_edge("plan_evidence", "rewrite_queries")
-    graph.add_edge("rewrite_queries", "retrieve_evidence")
+    graph.add_edge("rewrite_queries", "query_paper_graph")
+    graph.add_edge("query_paper_graph", "retrieve_evidence")
     graph.add_conditional_edges("retrieve_evidence", after_retrieval, {"generate": "generate_answer", "refuse": "refuse"})
     graph.add_edge("generate_answer", "validate_citations")
     graph.add_conditional_edges("validate_citations", after_validation, {"judge": "semantic_judge", "refuse": "refuse"})

@@ -76,32 +76,12 @@ class IngestionWorker:
             self._run(task, [sys.executable, "scripts/chunk_paper.py", "--paper", str(paper_path)])
             chunks_path = paper_path.with_name("chunks.json")
 
-            task.stage = "index"
-            self.store.save(task)
-            index_command = [
-                sys.executable,
-                "scripts/index_dense.py",
-                "--chunks",
-                str(self.papers_root),
-                "--db",
-                str(self.chroma_db),
-                "--collection",
-                self.collection,
-                "--model",
-                self.embedding_model,
-            ]
-            if self.device:
-                index_command.extend(["--device", self.device])
-            if self.offline:
-                index_command.append("--offline")
-            self._run(task, index_command)
-
             task.status = IngestionStatus.SUCCEEDED
             task.stage = "ready_for_promotion"
             task.paper_id = paper_id
             task.paper_path = str(paper_path)
             task.chunks_path = str(chunks_path)
-            task.logs.append("ingestion completed; ready for workspace promotion")
+            task.logs.append("ingestion completed; content indexing is deferred until explicit promotion")
             print(f"[{task.task_id}] completed: paper_id={paper_id}", flush=True)
         except Exception as exc:
             task.status = IngestionStatus.FAILED

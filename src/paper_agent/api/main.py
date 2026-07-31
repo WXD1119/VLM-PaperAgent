@@ -2,6 +2,7 @@ import json
 import os
 import queue
 import threading
+from datetime import timedelta
 from pathlib import Path
 from collections.abc import Callable, Iterator
 from typing import Protocol, runtime_checkable
@@ -13,14 +14,24 @@ from paper_agent.agents import (
     ComparisonBudget,
     ComparisonMatrix,
     DeterministicReviewPlanner,
+    EvidenceBoundSectionWriter,
+    ReviewSectionSemanticJudge,
+    ReviewEvidence,
+    ReviewExecutionResult,
     LiteratureReviewPlan,
     ReadingCompareServices,
     ReviewBudget,
+    ReflectionAction,
+    ReviewReflection,
+    ReviewSectionDraft,
+    ReviewSectionPlan,
     ReviewTemplate,
     CitationValidator,
     SemanticCitationJudge,
     build_evidence_pack,
     build_reading_compare_graph,
+    build_review_writer_graph,
+    ReviewWriterServices,
 )
 from paper_agent.domain import (
     AnswerBundle,
@@ -46,7 +57,7 @@ from paper_agent.memory import (
     build_memory_summary,
     load_graph_entity_resolver,
 )
-from paper_agent.ingestion import IngestionTask, LocalIngestionTaskStore
+from paper_agent.ingestion import IngestionStatus, IngestionTask, LocalIngestionTaskStore
 from paper_agent.retrieval import (
     BM25Index,
     CrossEncoderReranker,
@@ -65,16 +76,20 @@ from paper_agent.graph import (
     delta_from_fragment,
     read_graph_jsonl,
 )
+from paper_agent.graph.concepts import extract_concepts
 from paper_agent.runtime import ResearchGraphRun, ResearchGraphServices, build_research_graph
 from paper_agent.security import ActorContext, validate_query
 from paper_agent.observability import JsonlTraceStore, TraceRecord, TraceRecorder
 from paper_agent.orchestration import (
+    AgentDispatch,
     ContextBudget,
     CorpusScope,
+    GovernedWorkflowHooks,
     ResearchRouteDecision,
     ResearchRouteRequest,
     ResearchRouter,
-    WorkflowHooks,
+    ScopeResolution,
+    WorkflowGovernance,
 )
 from paper_agent.planning import (
     DeterministicResearchPlanner,
@@ -84,6 +99,17 @@ from paper_agent.planning import (
     ResearchPlan,
     ResearchPlanExecutor,
     ResearchPlanStore,
+)
+from paper_agent.reviews import LocalReviewArtifactStore, ReviewArtifact, ReviewArtifactStore
+from paper_agent.knowledge_base import LibraryUpdate, LocalKnowledgeBaseStore, RebuildJob, RebuildKind
+from paper_agent.knowledge_base.coordinator import LibraryUpdateCoordinator
+from paper_agent.knowledge_base.models import LibraryUpdatePhase
+from paper_agent.temporary_workspace import (
+    LocalTemporaryWorkspaceStore,
+    TemporaryPaperRef,
+    TemporaryPaperWorkspace,
+    TemporaryWorkspaceIndexManager,
+    TemporaryWorkspaceStore,
 )
 from paper_agent.tools import AuthorizedToolGateway, ToolRuntimePolicy
 
@@ -109,6 +135,7 @@ class AskRequest(BaseModel):
     max_answer_attempts: int = Field(default=2, ge=1, le=5)
     use_context_guard: bool = True
     corpus_scope: CorpusScope = CorpusScope.AUTO
+    temporary_workspace_id: str | None = Field(default=None, max_length=128)
     selected_paper_ids: list[str] = Field(default_factory=list, max_length=20)
     web_expansion_confirmed: bool = False
     context_budget: ContextBudget = Field(default_factory=ContextBudget)
@@ -159,6 +186,7 @@ class WorkspacePromotionResponse(BaseModel):
     added_edges: int
     valid_after_commit: bool
     status: str
+    update_id: str | None = None
 
 
 class ResearchPlanCreateRequest(BaseModel):
@@ -182,6 +210,23 @@ class ResearchDispatchRequest(BaseModel):
     web_expansion_confirmed: bool = False
 
 
+class ResearchRunRequest(ResearchDispatchRequest):
+    """Run a router decision without exposing arbitrary tool selection to the client."""
+
+    confirm: bool = False
+    max_dimensions: int = Field(default=3, ge=1, le=8)
+    max_sections: int = Field(default=4, ge=2, le=10)
+    max_evidence_tasks: int = Field(default=24, ge=2, le=80)
+
+
+class ResearchRunResponse(BaseModel):
+    decision: ResearchRouteDecision
+    answers: list[AskResponse] = Field(default_factory=list)
+    comparison: ComparisonMatrix | None = None
+    review: ReviewArtifact | None = None
+    pending_dispatches: list[AgentDispatch] = Field(default_factory=list)
+
+
 class ComparisonRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4_000)
     paper_ids: list[str] = Field(min_length=2, max_length=12)
@@ -196,8 +241,29 @@ class ReviewPlanRequest(BaseModel):
     max_evidence_tasks: int = Field(default=24, ge=2, le=80)
 
 
+class ReviewRunRequest(ReviewPlanRequest):
+    """Execution is explicitly confirmed because it can issue many paper QA calls."""
+
+    confirm: bool = False
+
+
+class TemporaryWorkspaceCreateRequest(BaseModel):
+    ingestion_task_ids: list[str] = Field(min_length=1, max_length=20)
+    ttl_hours: int = Field(default=24, ge=1, le=48)
+
+
+class RebuildEnqueueRequest(BaseModel):
+    paper_id: str = Field(min_length=1, max_length=128)
+    kind: RebuildKind
+    target_parser_version: str | None = Field(default=None, max_length=128)
+    target_embedding_model: str | None = Field(default=None, max_length=512)
+
+
 class PaperQAService(Protocol):
     def ask(self, request: AskRequest) -> AskResponse: ...
+
+
+LibraryIndexer = Callable[[ChunkBundle], None]
 
 
 @runtime_checkable
@@ -369,6 +435,128 @@ class ApiReviewPlanService:
         )
 
 
+class ApiReviewWriterService(ApiReviewPlanService):
+    """Adapt the bounded review LangGraph to the scoped paper QA service."""
+
+    def __init__(
+        self,
+        qa_service: PaperQAService,
+        graph_reader: GraphReadService,
+        store: ReviewArtifactStore,
+    ) -> None:
+        super().__init__(graph_reader)
+        self.qa_service = qa_service
+        self.store = store
+
+    def run(
+        self,
+        request: ReviewRunRequest,
+        *,
+        user_id: str,
+        session_id: str,
+    ) -> ReviewArtifact:
+        if not request.confirm:
+            raise ValueError("set confirm=true after reviewing the literature-review plan")
+        # Validate the selection before any model/tool invocation.
+        self.create(request)
+
+        def ask_paper(question: str, paper_id: str) -> PaperQAResult:
+            response = self.qa_service.ask(
+                AskRequest(
+                    query=question,
+                    paper_id=paper_id,
+                    corpus_scope=CorpusScope.ACTIVE_PAPER_ONLY,
+                    user_id=user_id,
+                    session_id=session_id,
+                    top_k=5,
+                )
+            )
+            return PaperQAResult(
+                answer=response.bundle.answer.answer,
+                evidence_chunk_ids=[item.chunk_id for item in response.bundle.evidence_pack.items],
+                trace_id=response.trace_id,
+                citation_valid=response.bundle.citation_validation.valid,
+                abstained=response.bundle.answer.abstained,
+            )
+
+        def deterministic_write_section(section: ReviewSectionPlan, evidence: list[ReviewEvidence]) -> ReviewSectionDraft:
+            usable = [item for item in evidence if item.citation_valid and not item.abstained]
+            if not usable:
+                content = "Insufficient citation-validated evidence was retrieved for this section."
+            else:
+                content = "\n\n".join(
+                    f"[{item.paper_id}] {item.summary} (evidence: {', '.join(item.evidence_chunk_ids)})"
+                    for item in usable
+                )
+            return ReviewSectionDraft(
+                section_id=section.section_id,
+                title=section.title,
+                content=content,
+                evidence_chunk_ids=[chunk_id for item in usable for chunk_id in item.evidence_chunk_ids],
+                citation_valid=bool(usable),
+            )
+
+        # Production runtime uses a structured LLM writer; injected/test QA
+        # services retain a deterministic writer without requiring a model.
+        write_section = deterministic_write_section
+        if isinstance(self.qa_service, LazyPaperQAService):
+            write_section = EvidenceBoundSectionWriter(self.qa_service._llm_client()).write
+
+        reflect = None
+        if isinstance(self.qa_service, LazyPaperQAService) and self.qa_service.judge_url:
+            semantic_judge = ReviewSectionSemanticJudge(self.qa_service._judge_client())
+
+            def reflect(plan, drafts, evidence):
+                reviews = [
+                    semantic_judge.review(draft, [item for item in evidence if item.section_id == draft.section_id])
+                    for draft in drafts
+                ]
+                non_passing = [item for item in reviews if item.suggested_action != ReflectionAction.PASS]
+                if not non_passing:
+                    return ReviewReflection(action=ReflectionAction.PASS, reasoning="all review sections passed semantic citation audit")
+                # Evidence absence takes precedence over a rewrite; otherwise
+                # preserve a bounded retrieve-more repair when the judge failed.
+                action = next(
+                    (item.suggested_action for item in non_passing if item.suggested_action == ReflectionAction.MARK_INSUFFICIENT_EVIDENCE),
+                    next((item.suggested_action for item in non_passing if item.suggested_action == ReflectionAction.RETRIEVE_MORE), ReflectionAction.REWRITE_SECTION),
+                )
+                return ReviewReflection(
+                    action=action,
+                    affected_section_ids=[item.section_id for item in non_passing],
+                    reasoning="; ".join(item.reasoning for item in non_passing),
+                )
+
+        graph = build_review_writer_graph(ReviewWriterServices(ask_paper=ask_paper, write_section=write_section, reflect=reflect))
+        state = graph.invoke(
+            {
+                "topic": request.topic,
+                "paper_ids": request.paper_ids,
+                "template": request.template,
+                "budget": ReviewBudget(max_sections=request.max_sections, max_evidence_tasks=request.max_evidence_tasks),
+                "confirmed": True,
+            }
+        )
+        return self.store.create(
+            ReviewArtifact(
+                user_id=user_id,
+                execution=ReviewExecutionResult(
+                    plan=state["plan"],
+                    drafts=state.get("drafts", []),
+                    reflection=state.get("reflection"),
+                    waiting_confirmation=state.get("waiting_confirmation", False),
+                    evidence_matrix=(state["evidence_matrix"].model_dump(mode="json") if state.get("evidence_matrix") else None),
+                    validation=(state["validation"].model_dump(mode="json") if state.get("validation") else None),
+                ),
+            )
+        )
+
+    def load(self, *, user_id: str, review_id: str) -> ReviewArtifact:
+        return self.store.load(user_id, review_id)
+
+    def list(self, *, user_id: str, limit: int) -> list[ReviewArtifact]:
+        return self.store.list(user_id, limit)
+
+
 class LocalGraphReadService:
     """JSONL Paper KG 或有效 workspace 图谱的只读适配器。"""
 
@@ -461,6 +649,8 @@ class LazyPaperQAService:
         self.redis_url = os.getenv("REDIS_URL")
         self.mysql_url = os.getenv("MYSQL_URL")
         self.trace_store = JsonlTraceStore(os.getenv("PAPER_AGENT_TRACE_PATH", "artifacts/traces/traces.jsonl"))
+        self.temporary_workspace_root = os.getenv("PAPER_AGENT_TEMPORARY_WORKSPACE_ROOT", "artifacts/temporary_workspaces")
+        self.temporary_index_root = os.getenv("PAPER_AGENT_TEMPORARY_INDEX_ROOT", "artifacts/temporary_indexes")
 
         self._sparse = None
         self._dense = None
@@ -470,6 +660,7 @@ class LazyPaperQAService:
         self._entity_resolver = None
         self._entity_resolver_loaded = False
         self._mysql_memory = None
+        self._temporary_index = None
         self.runtime = os.getenv("PAPER_AGENT_RUNTIME", "langgraph")
 
     def ask(self, request: AskRequest) -> AskResponse:
@@ -570,8 +761,10 @@ class LazyPaperQAService:
         recorder: TraceRecorder,
         memory_warnings: list[str],
     ) -> AskResponse:
+        request = self._resolve_temporary_workspace_request(request)
+        actor = ActorContext(user_id=request.user_id, session_id=request.session_id)
         gateway = AuthorizedToolGateway(
-            ActorContext(user_id=request.user_id, session_id=request.session_id),
+            actor,
             policies={
                 "retrieve_evidence": ToolRuntimePolicy(timeout_s=45.0, max_retries=1, resources=frozenset({"retrieval"})),
                 "generate_answer": ToolRuntimePolicy(timeout_s=180.0, resources=frozenset({"generator"})),
@@ -607,6 +800,18 @@ class LazyPaperQAService:
             scoped_request = request.model_copy(
                 update={"paper_id": paper_id, "kind": kind, "use_rerank": use_rerank}
             )
+            if scoped_request.corpus_scope == CorpusScope.TEMPORARY_WORKSPACE:
+                if not scoped_request.temporary_workspace_id:
+                    raise ValueError("temporary_workspace scope requires temporary_workspace_id")
+                return self._temporary_retriever(scoped_request).search(
+                    user_id=scoped_request.user_id,
+                    session_id=scoped_request.session_id,
+                    workspace_id=scoped_request.temporary_workspace_id,
+                    query=query,
+                    top_k=top_k,
+                    paper_id=paper_id,
+                    kind=kind,
+                )
             return self._retriever(scoped_request).search(query, top_k, paper_id=paper_id, kind=kind)
 
         graph = build_research_graph(
@@ -616,8 +821,18 @@ class LazyPaperQAService:
                 build_evidence=build_evidence_pack,
                 answer=AnswerAgent(self._llm_client()).answer,
                 judge=(self._judge_client().evaluate if self.judge_url else None),
+                graph_candidates=self._graph_candidate_papers,
                 run_tool=gateway.run,
-                hooks=WorkflowHooks(),
+                hooks=GovernedWorkflowHooks(
+                    WorkflowGovernance(
+                        actor=actor,
+                        # The graph replaces this initial scope after
+                        # ContextGuard resolves the actual corpus boundary.
+                        scope=ScopeResolution(scope=request.corpus_scope),
+                        context_budget=request.context_budget,
+                        web_expansion_confirmed=request.web_expansion_confirmed,
+                    )
+                ),
             )
         )
         state = graph.invoke(
@@ -830,6 +1045,70 @@ class LazyPaperQAService:
             )
         return RerankedRetriever(hybrid, self._reranker, request.candidate_k)
 
+    def _resolve_temporary_workspace_request(self, request: AskRequest) -> AskRequest:
+        if request.corpus_scope != CorpusScope.TEMPORARY_WORKSPACE:
+            return request
+        if not request.temporary_workspace_id:
+            raise ValueError("temporary_workspace scope requires temporary_workspace_id")
+        workspace = self._temporary_workspace_store().load(
+            user_id=request.user_id,
+            session_id=request.session_id,
+            workspace_id=request.temporary_workspace_id,
+        )
+        paper_ids = [item.paper_id for item in workspace.papers]
+        if request.paper_id is None:
+            if len(paper_ids) != 1:
+                raise ValueError("choose paper_id when a temporary workspace contains multiple papers")
+            return request.model_copy(update={"paper_id": paper_ids[0]})
+        if request.paper_id not in paper_ids:
+            raise PermissionError("paper_id is outside the temporary workspace")
+        return request
+
+    def _temporary_retriever(self, request: AskRequest):
+        if self._temporary_index is None:
+            encoder = SentenceTransformerEncoder(
+                self.embedding_model,
+                device=self.device,
+                local_files_only=self.offline,
+            )
+            self._temporary_index = TemporaryWorkspaceIndexManager(
+                self._temporary_workspace_store(),
+                encoder,
+                root=self.temporary_index_root,
+                rrf_k=self.rrf_k,
+                candidate_k=request.candidate_k,
+            )
+        return self._temporary_index
+
+    def _temporary_workspace_store(self) -> LocalTemporaryWorkspaceStore:
+        return LocalTemporaryWorkspaceStore(
+            self.temporary_workspace_root,
+            on_delete=lambda workspace: TemporaryWorkspaceIndexManager.remove_persisted(
+                self.temporary_index_root, workspace.workspace_id
+            ),
+        )
+
+    def _graph_candidate_papers(self, query: str, limit: int) -> list[str]:
+        graph = (
+            LocalGraphWorkspaceStore(self.graph_workspace_path).load_effective_graph()
+            if self.graph_workspace_path
+            else read_graph_jsonl(self.graph_path)
+        )
+        graph_query = GraphQuery(graph)
+        candidates: list[str] = []
+        # Extracting compact concept phrases avoids treating the whole natural
+        # language question as a graph-node key.
+        for mention in extract_concepts(query):
+            neighborhood = graph_query.concept_neighborhood(mention.label, limit=limit)
+            candidates.extend(str(item.properties.get("paper_id", "")) for item in neighborhood.papers)
+            candidates.extend(str(item.properties.get("paper_id", "")) for item in neighborhood.chunks)
+        if not candidates:
+            candidates.extend(
+                str(item.properties.get("paper_id", ""))
+                for item in graph_query.search_nodes(query, limit=limit)
+            )
+        return [paper_id for paper_id in dict.fromkeys(candidates) if paper_id][:limit]
+
     def _llm_client(self):
         if self._client is not None:
             return self._client
@@ -902,6 +1181,10 @@ def create_app(
     graph_service: GraphReadService | None = None,
     ingestion_service: IngestionService | None = None,
     research_plan_store: ResearchPlanStore | None = None,
+    review_artifact_store: ReviewArtifactStore | None = None,
+    temporary_workspace_store: TemporaryWorkspaceStore | None = None,
+    knowledge_base_store: LocalKnowledgeBaseStore | None = None,
+    library_indexer: LibraryIndexer | None = None,
 ):
     if FastAPI is None:
         raise RuntimeError("Install the api extra: pip install -e '.[api]'")
@@ -925,6 +1208,35 @@ def create_app(
     research_plans = ApiResearchPlanService(plan_store, qa_service, graph_reader)
     reading_compare = ApiReadingCompareService(qa_service, graph_reader)
     review_plans = ApiReviewPlanService(graph_reader)
+    review_store = review_artifact_store or LocalReviewArtifactStore(
+        os.getenv("PAPER_AGENT_REVIEW_ROOT", "artifacts/reviews")
+    )
+    review_writer = ApiReviewWriterService(qa_service, graph_reader, review_store)
+    knowledge_base = knowledge_base_store or LocalKnowledgeBaseStore(
+        os.getenv("PAPER_AGENT_KNOWLEDGE_BASE_ROOT", "artifacts/knowledge_base")
+    )
+    def publish_library_index(chunks: ChunkBundle) -> None:
+        if library_indexer is not None:
+            library_indexer(chunks)
+            return
+        encoder = SentenceTransformerEncoder(
+            os.getenv("PAPER_AGENT_EMBEDDING_MODEL", "artifacts/models/bge-m3"),
+            device=os.getenv("PAPER_AGENT_DEVICE") or None,
+            local_files_only=os.getenv("PAPER_AGENT_OFFLINE", "1") not in {"0", "false", "False"},
+        )
+        store = ChromaVectorStore(
+            os.getenv("PAPER_AGENT_CHROMA_DB", "artifacts/chroma"),
+            os.getenv("PAPER_AGENT_CHROMA_COLLECTION", "paper_chunks_bge_m3"),
+            encoder,
+        )
+        store.upsert(chunks.children)
+    temporary_index_root = os.getenv("PAPER_AGENT_TEMPORARY_INDEX_ROOT", "artifacts/temporary_indexes")
+    temporary_workspaces = temporary_workspace_store or LocalTemporaryWorkspaceStore(
+        os.getenv("PAPER_AGENT_TEMPORARY_WORKSPACE_ROOT", "artifacts/temporary_workspaces"),
+        on_delete=lambda workspace: TemporaryWorkspaceIndexManager.remove_persisted(
+            temporary_index_root, workspace.workspace_id
+        ),
+    )
 
     def actor_from_headers(
         x_user_id: str | None,
@@ -995,6 +1307,69 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    @app.post("/temporary-workspaces", response_model=TemporaryPaperWorkspace, status_code=201)
+    def create_temporary_workspace(
+        request: TemporaryWorkspaceCreateRequest,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> TemporaryPaperWorkspace:
+        actor = actor_from_headers(x_user_id, x_session_id)
+        references: list[TemporaryPaperRef] = []
+        try:
+            for task_id in list(dict.fromkeys(request.ingestion_task_ids)):
+                task = ingestion.load(task_id)
+                if task.status != IngestionStatus.SUCCEEDED or not task.paper_id or not task.paper_path or not task.chunks_path:
+                    raise ValueError(f"ingestion task is not ready for temporary reading: {task_id}")
+                if task.workspace_commit_id:
+                    raise ValueError(f"promoted ingestion task cannot enter a temporary workspace: {task_id}")
+                references.append(
+                    TemporaryPaperRef(
+                        paper_id=task.paper_id,
+                        ingestion_task_id=task.task_id,
+                        title=task.filename,
+                        paper_path=task.paper_path,
+                        chunks_path=task.chunks_path,
+                    )
+                )
+            return temporary_workspaces.create(
+                user_id=actor.user_id,
+                session_id=actor.session_id,
+                papers=references,
+                ttl=timedelta(hours=request.ttl_hours),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="ingestion task not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/temporary-workspaces/{workspace_id}", response_model=TemporaryPaperWorkspace)
+    def get_temporary_workspace(
+        workspace_id: str,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> TemporaryPaperWorkspace:
+        actor = actor_from_headers(x_user_id, x_session_id)
+        try:
+            return temporary_workspaces.load(user_id=actor.user_id, session_id=actor.session_id, workspace_id=workspace_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="temporary workspace not found") from exc
+
+    @app.delete("/temporary-workspaces/{workspace_id}", status_code=204)
+    def delete_temporary_workspace(
+        workspace_id: str,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> None:
+        actor = actor_from_headers(x_user_id, x_session_id)
+        try:
+            deleted = temporary_workspaces.delete(user_id=actor.user_id, session_id=actor.session_id, workspace_id=workspace_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="temporary workspace not found") from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="temporary workspace not found")
+        # The temporary vector collection is stored only below this dedicated
+        # root; use the same validated ID to remove its persisted index.
+
     @app.get("/research/plans", response_model=list[ResearchPlan])
     def list_research_plans(
         limit: int = 20,
@@ -1014,6 +1389,104 @@ def create_app(
                 selected_paper_ids=request.selected_paper_ids,
                 web_expansion_confirmed=request.web_expansion_confirmed,
             )
+        )
+
+    @app.post("/research/run", response_model=ResearchRunResponse)
+    def run_research(
+        request: ResearchRunRequest,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> ResearchRunResponse:
+        """Execute only router-approved subgraphs in their declared dependency order."""
+
+        actor = actor_from_headers(x_user_id, x_session_id)
+        decision = ResearchRouter().route(
+            ResearchRouteRequest(
+                query=request.query,
+                mode=request.mode,
+                active_paper_id=request.active_paper_id,
+                selected_paper_ids=request.selected_paper_ids,
+                web_expansion_confirmed=request.web_expansion_confirmed,
+            )
+        )
+        if decision.needs_clarification:
+            return ResearchRunResponse(decision=decision, pending_dispatches=decision.dispatches)
+
+        answers: list[AskResponse] = []
+        comparison: ComparisonMatrix | None = None
+        review: ReviewArtifact | None = None
+        pending: list[AgentDispatch] = []
+        completed_modes: set[str] = set()
+        for dispatch in decision.dispatches:
+            if any(item not in completed_modes for item in dispatch.depends_on):
+                pending.append(dispatch)
+                continue
+            if dispatch.needs_confirmation and not request.confirm:
+                pending.append(dispatch)
+                continue
+            if dispatch.mode == "manage_papers":
+                # Ingestion requires a file upload and remains a separate explicit API.
+                pending.append(dispatch)
+                continue
+            if dispatch.mode in {"active_paper_explain", "library_related_work"}:
+                try:
+                    answers.append(
+                        qa_service.ask(
+                            AskRequest(
+                                query=request.query,
+                                paper_id=request.active_paper_id if dispatch.mode == "active_paper_explain" else None,
+                                corpus_scope=dispatch.corpus_scope,
+                                selected_paper_ids=request.selected_paper_ids,
+                                web_expansion_confirmed=request.web_expansion_confirmed,
+                                user_id=actor.user_id,
+                                session_id=actor.session_id,
+                            )
+                        )
+                    )
+                    completed_modes.add(dispatch.mode)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                continue
+            if dispatch.mode == "multi_paper_compare":
+                try:
+                    comparison = reading_compare.compare(
+                        query=request.query,
+                        paper_ids=request.selected_paper_ids,
+                        user_id=actor.user_id,
+                        session_id=actor.session_id,
+                        max_dimensions=request.max_dimensions,
+                    )
+                    completed_modes.add(dispatch.mode)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                continue
+            if dispatch.mode == "review_write":
+                if not request.confirm:
+                    pending.append(dispatch)
+                    continue
+                try:
+                    review = review_writer.run(
+                        ReviewRunRequest(
+                            topic=request.query,
+                            paper_ids=request.selected_paper_ids,
+                            max_sections=request.max_sections,
+                            max_evidence_tasks=request.max_evidence_tasks,
+                            confirm=True,
+                        ),
+                        user_id=actor.user_id,
+                        session_id=actor.session_id,
+                    )
+                    completed_modes.add(dispatch.mode)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                continue
+            pending.append(dispatch)
+        return ResearchRunResponse(
+            decision=decision,
+            answers=answers,
+            comparison=comparison,
+            review=review,
+            pending_dispatches=pending,
         )
 
     @app.post("/research/compare", response_model=ComparisonMatrix)
@@ -1038,6 +1511,39 @@ def create_app(
     def create_review_plan(request: ReviewPlanRequest) -> LiteratureReviewPlan:
         try:
             return review_plans.create(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/research/reviews", response_model=list[ReviewArtifact])
+    def list_reviews(
+        limit: int = 20,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> list[ReviewArtifact]:
+        actor = actor_from_headers(x_user_id, x_session_id)
+        return review_writer.list(user_id=actor.user_id, limit=max(1, min(limit, 100)))
+
+    @app.get("/research/reviews/{review_id}", response_model=ReviewArtifact)
+    def get_review(
+        review_id: str,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> ReviewArtifact:
+        actor = actor_from_headers(x_user_id, x_session_id)
+        try:
+            return review_writer.load(user_id=actor.user_id, review_id=review_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="review not found") from exc
+
+    @app.post("/research/reviews/run", response_model=ReviewArtifact)
+    def run_review(
+        request: ReviewRunRequest,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> ReviewExecutionResult:
+        actor = actor_from_headers(x_user_id, x_session_id)
+        try:
+            return review_writer.run(request, user_id=actor.user_id, session_id=actor.session_id)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1093,6 +1599,33 @@ def create_app(
             return graph_reader.concept(q.strip(), max(1, min(limit, 20)))
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/knowledge-base/updates", response_model=list[LibraryUpdate])
+    def list_library_updates(limit: int = 20) -> list[LibraryUpdate]:
+        return knowledge_base.list_updates(max(1, min(limit, 100)))
+
+    @app.get("/knowledge-base/papers/{paper_id}/versions", response_model=list[LibraryUpdate])
+    def list_paper_versions(paper_id: str) -> list[LibraryUpdate]:
+        return [item for item in knowledge_base.list_updates(limit=10_000) if item.paper_id == paper_id]
+
+    @app.get("/knowledge-base/rebuilds", response_model=list[RebuildJob])
+    def list_rebuilds(limit: int = 20) -> list[RebuildJob]:
+        return knowledge_base.list_rebuilds(max(1, min(limit, 100)))
+
+    @app.post("/knowledge-base/rebuilds", response_model=RebuildJob, status_code=202)
+    def enqueue_rebuild(request: RebuildEnqueueRequest) -> RebuildJob:
+        if request.kind == RebuildKind.REPARSE and not request.target_parser_version:
+            raise HTTPException(status_code=422, detail="target_parser_version is required for reparse")
+        if request.kind == RebuildKind.REEMBED and not request.target_embedding_model:
+            raise HTTPException(status_code=422, detail="target_embedding_model is required for reembed")
+        return knowledge_base.enqueue_rebuild(
+            RebuildJob(
+                paper_id=request.paper_id,
+                kind=request.kind,
+                target_parser_version=request.target_parser_version,
+                target_embedding_model=request.target_embedding_model,
+            )
+        )
 
     @app.get("/ingestion/tasks", response_model=list[IngestionTask])
     def list_ingestion_tasks(limit: int = 20) -> list[IngestionTask]:
@@ -1151,43 +1684,64 @@ def create_app(
                 workspace.load_effective_graph(),
                 build_paper_fragment(paper, chunks),
             )
-            if not delta.added_nodes and not delta.added_edges:
+            parser_version = paper.elements[0].parser_version if paper.elements else "unknown"
+            update = LibraryUpdate(
+                paper_id=paper.paper_id,
+                content_sha256=paper.sha256,
+                parser_version=parser_version,
+                embedding_model=os.getenv("PAPER_AGENT_EMBEDDING_MODEL", "artifacts/models/bge-m3"),
+                ingestion_task_id=task_id,
+            )
+            commit_id: str | None = None
+
+            def validate(_update: LibraryUpdate) -> None:
+                report = GraphValidator().validate(workspace.preview_delta(delta))
+                if not report.valid:
+                    raise ValueError("workspace promotion would make graph invalid: " + "; ".join(report.errors))
+
+            def index(_update: LibraryUpdate) -> None:
+                if not chunks.children:
+                    raise ValueError("cannot promote a paper with no retrieval chunks")
+                publish_library_index(chunks)
+
+            def graph_action(_update: LibraryUpdate) -> str | None:
+                nonlocal commit_id
+                if not delta.added_nodes and not delta.added_edges:
+                    return None
+                commit = workspace.commit_delta(
+                    delta,
+                    author_id=os.getenv("PAPER_AGENT_WORKSPACE_AUTHOR", "web-user"),
+                    message=f"add uploaded paper {paper.paper_id}",
+                )
+                commit_id = commit.commit_id
+                return commit_id
+
+            def metadata(_update: LibraryUpdate) -> None:
                 ingestion.mark_promoted(
                     task_id,
                     workspace_path=workspace_path,
-                    commit_id=None,
-                    message="workspace promotion no-op; paper already visible",
+                    commit_id=commit_id,
+                    message=(f"promoted paper through update {_update.update_id}"),
                 )
-                return WorkspacePromotionResponse(
-                    task_id=task_id,
-                    workspace_path=workspace_path,
-                    added_nodes=0,
-                    added_edges=0,
-                    valid_after_commit=True,
-                    status="already_visible",
-                )
-            report = GraphValidator().validate(workspace.preview_delta(delta))
-            if not report.valid:
-                raise ValueError("workspace promotion would make graph invalid: " + "; ".join(report.errors))
-            commit = workspace.commit_delta(
-                delta,
-                author_id=os.getenv("PAPER_AGENT_WORKSPACE_AUTHOR", "web-user"),
-                message=f"add uploaded paper {paper.paper_id}",
-            )
-            ingestion.mark_promoted(
-                task_id,
-                workspace_path=workspace_path,
-                commit_id=commit.commit_id,
-                message=f"promoted paper into workspace commit {commit.commit_id}",
-            )
+
+            result = LibraryUpdateCoordinator(
+                knowledge_base,
+                {
+                    LibraryUpdatePhase.VALIDATE: validate,
+                    LibraryUpdatePhase.INDEX: index,
+                    LibraryUpdatePhase.GRAPH: graph_action,
+                    LibraryUpdatePhase.METADATA: metadata,
+                },
+            ).run(update)
             return WorkspacePromotionResponse(
                 task_id=task_id,
                 workspace_path=workspace_path,
-                commit_id=commit.commit_id,
+                commit_id=result.graph_commit_id,
                 added_nodes=len(delta.added_nodes),
                 added_edges=len(delta.added_edges),
                 valid_after_commit=True,
-                status="promoted",
+                status="already_visible" if not delta.added_nodes and not delta.added_edges else "promoted",
+                update_id=result.update_id,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
