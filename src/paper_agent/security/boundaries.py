@@ -58,6 +58,7 @@ class ToolAuthorizationPolicy:
         "resolve_context": frozenset({"paper:read"}),
         "route_query": frozenset({"paper:read"}),
         "plan_evidence": frozenset({"paper:read"}),
+        "rewrite_queries": frozenset({"paper:read"}),
         "retrieve_evidence": frozenset({"paper:read"}),
         "build_evidence": frozenset({"paper:read"}),
         "generate_answer": frozenset({"paper:read"}),

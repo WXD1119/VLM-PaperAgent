@@ -8,7 +8,20 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
-from paper_agent.agents import AnswerAgent, CitationValidator, SemanticCitationJudge, build_evidence_pack
+from paper_agent.agents import (
+    AnswerAgent,
+    ComparisonBudget,
+    ComparisonMatrix,
+    DeterministicReviewPlanner,
+    LiteratureReviewPlan,
+    ReadingCompareServices,
+    ReviewBudget,
+    ReviewTemplate,
+    CitationValidator,
+    SemanticCitationJudge,
+    build_evidence_pack,
+    build_reading_compare_graph,
+)
 from paper_agent.domain import (
     AnswerBundle,
     ChunkBundle,
@@ -55,6 +68,14 @@ from paper_agent.graph import (
 from paper_agent.runtime import ResearchGraphRun, ResearchGraphServices, build_research_graph
 from paper_agent.security import ActorContext, validate_query
 from paper_agent.observability import JsonlTraceStore, TraceRecord, TraceRecorder
+from paper_agent.orchestration import (
+    ContextBudget,
+    CorpusScope,
+    ResearchRouteDecision,
+    ResearchRouteRequest,
+    ResearchRouter,
+    WorkflowHooks,
+)
 from paper_agent.planning import (
     DeterministicResearchPlanner,
     LocalResearchPlanStore,
@@ -87,6 +108,10 @@ class AskRequest(BaseModel):
     use_rerank: bool = True
     max_answer_attempts: int = Field(default=2, ge=1, le=5)
     use_context_guard: bool = True
+    corpus_scope: CorpusScope = CorpusScope.AUTO
+    selected_paper_ids: list[str] = Field(default_factory=list, max_length=20)
+    web_expansion_confirmed: bool = False
+    context_budget: ContextBudget = Field(default_factory=ContextBudget)
     # 仅由可信 API 边界写入，不能由请求体作为授权依据。
     user_id: str = Field(default="local-user", exclude=True)
     session_id: str = Field(default="local-session", exclude=True)
@@ -107,6 +132,7 @@ class AskResponse(BaseModel):
     route_intent: str | None = None
     route_confidence: float | None = None
     retrieval_policy: dict[str, object] = Field(default_factory=dict)
+    corpus_scope: CorpusScope | None = None
 
 
 class PaperSummary(BaseModel):
@@ -146,6 +172,28 @@ class ResearchPlanExecuteRequest(BaseModel):
     """执行草案前的显式确认，防止复杂任务静默消耗推理资源。"""
 
     confirm: bool = False
+
+
+class ResearchDispatchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=4_000)
+    mode: str | None = Field(default=None, max_length=128)
+    active_paper_id: str | None = None
+    selected_paper_ids: list[str] = Field(default_factory=list, max_length=20)
+    web_expansion_confirmed: bool = False
+
+
+class ComparisonRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=4_000)
+    paper_ids: list[str] = Field(min_length=2, max_length=12)
+    max_dimensions: int = Field(default=3, ge=1, le=8)
+
+
+class ReviewPlanRequest(BaseModel):
+    topic: str = Field(min_length=1, max_length=2_000)
+    paper_ids: list[str] = Field(min_length=2, max_length=30)
+    template: ReviewTemplate = ReviewTemplate.CONFERENCE_STYLE
+    max_sections: int = Field(default=4, ge=2, le=10)
+    max_evidence_tasks: int = Field(default=24, ge=2, le=80)
 
 
 class PaperQAService(Protocol):
@@ -243,6 +291,81 @@ class ApiResearchPlanService:
             user_id=user_id,
             plan_id=plan_id,
             confirmed=confirmed,
+        )
+
+
+class ApiReadingCompareService:
+    """Run the bounded comparison subgraph through the existing scoped QA API."""
+
+    def __init__(self, qa_service: PaperQAService, graph_reader: GraphReadService) -> None:
+        self.qa_service = qa_service
+        self.graph_reader = graph_reader
+
+    def compare(
+        self,
+        *,
+        query: str,
+        paper_ids: list[str],
+        user_id: str,
+        session_id: str,
+        max_dimensions: int,
+    ) -> ComparisonMatrix:
+        normalized = list(dict.fromkeys(item.strip() for item in paper_ids if item.strip()))
+        available = {paper.paper_id for paper in self.graph_reader.papers()}
+        unknown = sorted(set(normalized) - available)
+        if unknown:
+            raise ValueError(f"paper_id not available in the current library: {', '.join(unknown)}")
+
+        def ask_paper(question: str, paper_id: str) -> PaperQAResult:
+            response = self.qa_service.ask(
+                AskRequest(
+                    query=question,
+                    paper_id=paper_id,
+                    corpus_scope=CorpusScope.ACTIVE_PAPER_ONLY,
+                    user_id=user_id,
+                    session_id=session_id,
+                    top_k=5,
+                )
+            )
+            return PaperQAResult(
+                answer=response.bundle.answer.answer,
+                evidence_chunk_ids=[item.chunk_id for item in response.bundle.evidence_pack.items],
+                trace_id=response.trace_id,
+                citation_valid=response.bundle.citation_validation.valid,
+                abstained=response.bundle.answer.abstained,
+            )
+
+        graph = build_reading_compare_graph(
+            ReadingCompareServices(ask_paper=ask_paper)
+        )
+        state = graph.invoke(
+            {
+                "query": query,
+                "paper_ids": normalized,
+                "budget": ComparisonBudget(max_dimensions=max_dimensions),
+            }
+        )
+        return state["matrix"]
+
+
+class ApiReviewPlanService:
+    """Create inspectable review plans; execution remains behind confirmation."""
+
+    def __init__(self, graph_reader: GraphReadService) -> None:
+        self.graph_reader = graph_reader
+        self.planner = DeterministicReviewPlanner()
+
+    def create(self, request: ReviewPlanRequest) -> LiteratureReviewPlan:
+        normalized = list(dict.fromkeys(item.strip() for item in request.paper_ids if item.strip()))
+        available = {paper.paper_id for paper in self.graph_reader.papers()}
+        unknown = sorted(set(normalized) - available)
+        if unknown:
+            raise ValueError(f"paper_id not available in the current library: {', '.join(unknown)}")
+        return self.planner.plan(
+            request.topic,
+            normalized,
+            request.template,
+            ReviewBudget(max_sections=request.max_sections, max_evidence_tasks=request.max_evidence_tasks),
         )
 
 
@@ -494,12 +617,17 @@ class LazyPaperQAService:
                 answer=AnswerAgent(self._llm_client()).answer,
                 judge=(self._judge_client().evaluate if self.judge_url else None),
                 run_tool=gateway.run,
+                hooks=WorkflowHooks(),
             )
         )
         state = graph.invoke(
             {
                 "query": request.query,
                 "paper_id": request.paper_id,
+                "corpus_scope": request.corpus_scope,
+                "selected_paper_ids": request.selected_paper_ids,
+                "web_expansion_confirmed": request.web_expansion_confirmed,
+                "context_budget": request.context_budget,
                 "kind": request.kind,
                 "top_k": request.top_k,
                 "use_rerank": request.use_rerank,
@@ -540,6 +668,7 @@ class LazyPaperQAService:
                 if run.route_plan
                 else {}
             ),
+            corpus_scope=(run.scope_resolution.scope if getattr(run, "scope_resolution", None) else None),
         )
 
     def _ask_legacy(self, request: AskRequest) -> AskResponse:
@@ -794,6 +923,8 @@ def create_app(
             os.getenv("PAPER_AGENT_RESEARCH_PLAN_ROOT", "artifacts/research_plans")
         )
     research_plans = ApiResearchPlanService(plan_store, qa_service, graph_reader)
+    reading_compare = ApiReadingCompareService(qa_service, graph_reader)
+    review_plans = ApiReviewPlanService(graph_reader)
 
     def actor_from_headers(
         x_user_id: str | None,
@@ -872,6 +1003,43 @@ def create_app(
     ) -> list[ResearchPlan]:
         actor = actor_from_headers(x_user_id, x_session_id)
         return research_plans.list(user_id=actor.user_id, limit=max(1, min(limit, 100)))
+
+    @app.post("/research/dispatch", response_model=ResearchRouteDecision)
+    def dispatch_research(request: ResearchDispatchRequest) -> ResearchRouteDecision:
+        return ResearchRouter().route(
+            ResearchRouteRequest(
+                query=request.query,
+                mode=request.mode,
+                active_paper_id=request.active_paper_id,
+                selected_paper_ids=request.selected_paper_ids,
+                web_expansion_confirmed=request.web_expansion_confirmed,
+            )
+        )
+
+    @app.post("/research/compare", response_model=ComparisonMatrix)
+    def compare_papers(
+        request: ComparisonRequest,
+        x_user_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ) -> ComparisonMatrix:
+        try:
+            actor = actor_from_headers(x_user_id, x_session_id)
+            return reading_compare.compare(
+                query=request.query,
+                paper_ids=request.paper_ids,
+                user_id=actor.user_id,
+                session_id=actor.session_id,
+                max_dimensions=request.max_dimensions,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/research/reviews/plan", response_model=LiteratureReviewPlan)
+    def create_review_plan(request: ReviewPlanRequest) -> LiteratureReviewPlan:
+        try:
+            return review_plans.create(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/research/plans", response_model=ResearchPlan, status_code=201)
     def create_research_plan(

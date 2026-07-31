@@ -2,6 +2,7 @@
 
 from .evidence_planner import EvidencePlanner
 from .models import EvidencePlan, EvidenceSubQuestion, QueryIntent, QueryPlan
+from .query_rewriter import QueryRewriter
 from .query_classifier import QueryRouter
 
-__all__ = ["EvidencePlan", "EvidencePlanner", "EvidenceSubQuestion", "QueryIntent", "QueryPlan", "QueryRouter"]
+__all__ = ["EvidencePlan", "EvidencePlanner", "EvidenceSubQuestion", "QueryIntent", "QueryPlan", "QueryRewriter", "QueryRouter"]

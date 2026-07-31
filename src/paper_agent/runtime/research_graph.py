@@ -10,7 +10,8 @@ from paper_agent.agents import CitationValidator
 from paper_agent.domain import CitationValidation, EvidencePack, GroundedAnswer, SemanticCitationReport
 from paper_agent.memory import ContextGuardDecision
 from paper_agent.observability import TraceRecorder
-from paper_agent.routing import EvidencePlan, EvidencePlanner, QueryPlan, QueryRouter
+from paper_agent.orchestration import ContextBudget, ContextManager, CorpusScope, ScopeResolution, WorkflowHooks, resolve_scope
+from paper_agent.routing import EvidencePlan, EvidencePlanner, QueryPlan, QueryRewriter, QueryRouter
 
 
 AnswerCallable = Callable[[EvidencePack, str | None], tuple[GroundedAnswer, CitationValidation]]
@@ -21,6 +22,7 @@ JudgeCallable = Callable[[GroundedAnswer, EvidencePack], SemanticCitationReport]
 ToolRunCallable = Callable[[str, Callable[[], Any]], Any]
 RouteCallable = Callable[[str, str | None, object | None, bool], QueryPlan]
 EvidencePlanCallable = Callable[[str, QueryPlan], EvidencePlan]
+QueryRewriteCallable = Callable[[EvidencePlan], EvidencePlan]
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,9 @@ class ResearchGraphServices:
     run_tool: ToolRunCallable | None = None
     route: RouteCallable | None = None
     plan_evidence: EvidencePlanCallable | None = None
+    rewrite_queries: QueryRewriteCallable | None = None
+    context_manager: ContextManager | None = None
+    hooks: WorkflowHooks | None = None
 
 
 class ResearchGraphRun:
@@ -53,6 +58,7 @@ class ResearchGraphRun:
         self.rewrite_count = state.get("rewrite_count", 0)
         self.route_plan = state.get("route_plan")
         self.evidence_plan = state.get("evidence_plan")
+        self.scope_resolution = state.get("scope_resolution")
 
 
 class ResearchGraphState(TypedDict, total=False):
@@ -64,6 +70,12 @@ class ResearchGraphState(TypedDict, total=False):
     max_attempts: int
     context: ContextGuardDecision
     effective_paper_id: str | None
+    corpus_scope: CorpusScope
+    selected_paper_ids: list[str]
+    web_expansion_confirmed: bool
+    context_budget: ContextBudget
+    scope_resolution: ScopeResolution
+    scope_error: str | None
     route_plan: QueryPlan
     evidence_plan: EvidencePlan
     router_clarification_question: str | None
@@ -91,7 +103,17 @@ def build_research_graph(services: ResearchGraphServices):
     def execute(name: str, callback: Callable[[], Any]) -> Any:
         """所有图节点经同一受控工具入口运行，禁止 LLM 自行指定工具。"""
 
-        return services.run_tool(name, callback) if services.run_tool else callback()
+        if services.hooks:
+            services.hooks.emit("before_tool", name)
+        try:
+            value = services.run_tool(name, callback) if services.run_tool else callback()
+        except Exception as exc:
+            if services.hooks:
+                services.hooks.emit("after_tool", name, status="error", error=type(exc).__name__)
+            raise
+        if services.hooks:
+            services.hooks.emit("after_tool", name, status="success")
+        return value
 
     def resolve_context(state: ResearchGraphState) -> dict[str, Any]:
         decision = execute(
@@ -118,6 +140,27 @@ def build_research_graph(services: ResearchGraphServices):
             "semantic_gate_enabled": False,
             "semantic_gate_passed": None,
         }
+
+    def resolve_corpus_scope(state: ResearchGraphState) -> dict[str, Any]:
+        try:
+            resolution = resolve_scope(
+                state.get("corpus_scope", CorpusScope.AUTO),
+                active_paper_id=state.get("effective_paper_id"),
+                selected_paper_ids=state.get("selected_paper_ids"),
+                web_expansion_confirmed=state.get("web_expansion_confirmed", False),
+            )
+            if resolution.requires_user_confirmation:
+                return {
+                    "scope_resolution": resolution,
+                    "scope_error": "请先确认是否允许联网扩展论文范围。",
+                    "router_clarification_question": "请确认是否允许联网扩展论文范围。",
+                }
+            return {"scope_resolution": resolution, "scope_error": None}
+        except ValueError as exc:
+            return {
+                "scope_error": str(exc),
+                "router_clarification_question": "请先选择当前论文或明确要检索的论文范围。",
+            }
 
     def route_query(state: ResearchGraphState) -> dict[str, Any]:
         route = execute(
@@ -183,6 +226,26 @@ def build_research_graph(services: ResearchGraphServices):
             )
         return {"evidence_plan": plan}
 
+    def rewrite_queries(state: ResearchGraphState) -> dict[str, Any]:
+        original = state["evidence_plan"]
+        rewritten = execute(
+            "rewrite_queries",
+            lambda: services.rewrite_queries(original) if services.rewrite_queries else QueryRewriter().rewrite(original),
+        )
+        recorder = state.get("trace_recorder")
+        if recorder:
+            recorder.record_event(
+                "query_rewrite",
+                status="success",
+                elapsed_ms=0,
+                attributes={
+                    "input_query_count": len(original.sub_questions),
+                    "output_query_count": len(rewritten.sub_questions),
+                    "strategy": "deterministic_normalize_dedupe",
+                },
+            )
+        return {"evidence_plan": rewritten}
+
     def retrieve(state: ResearchGraphState) -> dict[str, Any]:
         plan = state["evidence_plan"]
         total_paths = sum(len(item.evidence_types) for item in plan.sub_questions)
@@ -203,14 +266,28 @@ def build_research_graph(services: ResearchGraphServices):
                         state["route_plan"].use_rerank,
                     ),
                 )
-                for hit in _prioritize_sections(hits, sub_question.preferred_sections):
+                allowed_hits = [
+                    hit
+                    for hit in hits
+                    if state["scope_resolution"].allows(str(getattr(hit, "paper_id", "")))
+                ]
+                for hit in _prioritize_sections(allowed_hits, sub_question.preferred_sections):
                     chunk_id = str(getattr(hit, "chunk_id", ""))
                     if chunk_id and chunk_id not in hit_ids:
                         hit_ids.add(chunk_id)
                         merged_hits.append(hit)
                         kind_counts[str(getattr(hit, "kind", "unknown"))] = kind_counts.get(str(getattr(hit, "kind", "unknown")), 0) + 1
         hits = merged_hits[: max(state["top_k"], plan.minimum_evidence_count)]
-        pack = execute("build_evidence", lambda: services.build_evidence(state["query"], hits))
+        if hits:
+            pack = execute("build_evidence", lambda: services.build_evidence(state["query"], hits))
+        else:
+            pack = EvidencePack(query=state["query"], items=[])
+        selection = (services.context_manager or ContextManager()).select_evidence(
+            pack.items,
+            scope=state["scope_resolution"],
+            budget=state.get("context_budget", ContextBudget()),
+        )
+        pack = pack.model_copy(update={"items": selection.items})
         recorder = state.get("trace_recorder")
         if recorder:
             recorder.record_event(
@@ -224,15 +301,30 @@ def build_research_graph(services: ResearchGraphServices):
                     "evidence_count": len(pack.items),
                     "kind_counts": kind_counts,
                     "minimum_evidence_count": plan.minimum_evidence_count,
+                    "scope": state["scope_resolution"].scope.value,
+                    "context_evidence_tokens": selection.estimated_tokens,
+                    "dropped_evidence_count": len(selection.dropped_evidence_ids),
                 },
             )
-        return {"evidence_pack": pack}
+        return {
+            "evidence_pack": pack,
+            "refusal_kind": None if pack.items else "evidence_insufficient",
+        }
 
     def generate(state: ResearchGraphState) -> dict[str, Any]:
+        if services.hooks:
+            services.hooks.emit(
+                "before_model",
+                "generate_answer",
+                scope=state["scope_resolution"].scope.value,
+                evidence_count=len(state["evidence_pack"].items),
+            )
         answer, validation = execute(
             "generate_answer",
             lambda: services.answer(state["evidence_pack"], state.get("feedback")),
         )
+        if services.hooks:
+            services.hooks.emit("after_model", "generate_answer", status="success")
         return {
             "answer": answer,
             "citation_validation": validation,
@@ -292,6 +384,12 @@ def build_research_graph(services: ResearchGraphServices):
     def after_route(state: ResearchGraphState) -> str:
         return "clarification" if state["route_plan"].needs_clarification else "plan_evidence"
 
+    def after_scope(state: ResearchGraphState) -> str:
+        return "clarification" if state.get("scope_error") else "route"
+
+    def after_retrieval(state: ResearchGraphState) -> str:
+        return "generate" if state["evidence_pack"].items else "refuse"
+
     def after_validation(state: ResearchGraphState) -> str:
         return "refuse" if not state["citation_validation"].valid else "judge"
 
@@ -307,26 +405,40 @@ def build_research_graph(services: ResearchGraphServices):
 
         def wrapped(state: ResearchGraphState):
             recorder = state.get("trace_recorder")
-            return recorder.run(name, lambda: handler(state)) if recorder else handler(state)
+            if services.hooks:
+                services.hooks.emit("on_transition", name, status="running")
+            try:
+                value = recorder.run(name, lambda: handler(state)) if recorder else handler(state)
+            except Exception:
+                if services.hooks:
+                    services.hooks.emit("on_transition", name, status="error")
+                raise
+            if services.hooks:
+                services.hooks.emit("on_transition", name, status="success")
+            return value
 
         return wrapped
 
     graph = StateGraph(ResearchGraphState)
     graph.add_node("resolve_context", traced("resolve_context", resolve_context))
+    graph.add_node("resolve_corpus_scope", traced("resolve_corpus_scope", resolve_corpus_scope))
     graph.add_node("clarification", traced("clarification", clarification))
     graph.add_node("route_query", traced("route_query", route_query))
     graph.add_node("plan_evidence", traced("plan_evidence", plan_evidence))
+    graph.add_node("rewrite_queries", traced("rewrite_queries", rewrite_queries))
     graph.add_node("retrieve_evidence", traced("retrieve_evidence", retrieve))
     graph.add_node("generate_answer", traced("generate_answer", generate))
     graph.add_node("validate_citations", traced("validate_citations", validate_citations))
     graph.add_node("semantic_judge", traced("semantic_judge", judge))
     graph.add_node("refuse", traced("refuse", refuse))
     graph.add_edge(START, "resolve_context")
-    graph.add_conditional_edges("resolve_context", after_context, {"clarification": "clarification", "route": "route_query"})
+    graph.add_conditional_edges("resolve_context", after_context, {"clarification": "clarification", "route": "resolve_corpus_scope"})
+    graph.add_conditional_edges("resolve_corpus_scope", after_scope, {"clarification": "clarification", "route": "route_query"})
     graph.add_edge("clarification", END)
     graph.add_conditional_edges("route_query", after_route, {"clarification": "clarification", "plan_evidence": "plan_evidence"})
-    graph.add_edge("plan_evidence", "retrieve_evidence")
-    graph.add_edge("retrieve_evidence", "generate_answer")
+    graph.add_edge("plan_evidence", "rewrite_queries")
+    graph.add_edge("rewrite_queries", "retrieve_evidence")
+    graph.add_conditional_edges("retrieve_evidence", after_retrieval, {"generate": "generate_answer", "refuse": "refuse"})
     graph.add_edge("generate_answer", "validate_citations")
     graph.add_conditional_edges("validate_citations", after_validation, {"judge": "semantic_judge", "refuse": "refuse"})
     graph.add_conditional_edges("semantic_judge", after_judge, {"end": END, "generate": "generate_answer", "refuse": "refuse"})
